@@ -182,7 +182,7 @@ public function query($query) {
 }
 ```
 
-**Source attribution:** `get_caller_source()` uses `debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 15)` to find the first file outside `wp-includes/` and the wp-flame plugin directory. Result passed through `Collector::get_source_from_file()` and cached by caller file path.
+**Source attribution:** `get_caller_source()` uses `debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 15)` to find the first file outside `wp-includes/` and the wp-flame plugin directory. Result passed through `$this->collector->get_source_from_file($file)`, which handles caching internally.
 
 **Query text:** First 200 characters stored by default. The `wp_flame_full_query_text` option (default false) controls full capture. This option is read once at construction time (in `from_wpdb()`) and stored as an instance property — not re-read on every query call.
 
@@ -205,7 +205,7 @@ Admin UI: trace list and flame graph view. Server-rendered, no REST API.
 - Summary stats: Total time, DB time, Query count, Peak memory
 
 **Admin notices:**
-- mu-plugin missing: "WP Flame is running in limited mode — plugin load timing is unavailable."
+- mu-plugin missing: "WP Flame is running in limited mode — plugin load timing is unavailable." Determined by checking physical file presence (`file_exists(WPMU_PLUGIN_DIR . '/wp-flame-early-hooks.php')`) — not the `wp_flame_mu_plugin_failed` option, since users may manually add or remove the file. The option is only used to show a one-time activation warning.
 - `$wpdb` conflict: "DB query instrumentation is disabled — another plugin is modifying the database layer."
 
 ## Flame Graph Renderer (vanilla JS, SVG)
@@ -280,7 +280,7 @@ Render phase span ID is stored and explicitly closed by the shutdown handler (st
 2. Close any remaining open spans (safety net): iterate the span stack from top to bottom, calling `end_span()` for each with the current `microtime(true)`. Each safety-net-closed span gets `['auto_closed' => true]` added to its meta for debugging
 3. Determine if this trace should be saved:
    - Check `wp_flame_enabled` option — if false, discard and return
-   - Check admin status: use `$this->is_admin_request` flag, set at `init` time (priority 0) via `current_user_can('manage_options')`. This avoids relying on `current_user_can()` at shutdown where authentication context may be unreliable. If the flag was never set (request didn't reach `init`), discard.
+   - Check admin status: use `$this->is_admin_request` flag, set at `init` time (priority 0) via `current_user_can('manage_options')`. This avoids relying on `current_user_can()` at shutdown where authentication context may be unreliable. If the flag was never set (request didn't reach `init` — e.g., early `wp_die()`, fatal error, or short-circuited request), discard. This is intentional: requests that don't complete the WordPress lifecycle produce incomplete traces that are not useful for profiling.
 4. Build Trace from Collector
 5. Pass to `Storage::save_trace()`
 
