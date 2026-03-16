@@ -65,6 +65,7 @@ function wp_flame_activate(): void {
     add_option( 'wp_flame_enabled', true );
     add_option( 'wp_flame_retention_days', 7 );
     add_option( 'wp_flame_full_query_text', false );
+    add_option( 'wp_flame_min_callback_ms', 0.5 );
 }
 
 function wp_flame_deactivate(): void {
@@ -148,6 +149,19 @@ function wp_flame_init(): void {
         $admin = new WPFlame\Admin( new WPFlame\Storage( $wpdb ) );
         $admin->register();
     }
+
+    // Per-callback instrumentation (Phase 2)
+    $min_callback_ms = (float) get_option( 'wp_flame_min_callback_ms', 0.5 );
+
+    // Pass 1: wrap callbacks registered before plugins_loaded
+    add_action( 'plugins_loaded', function () use ( $collector, $min_callback_ms ) {
+        wp_flame_wrap_callbacks( $collector, $min_callback_ms );
+    }, 1 );
+
+    // Pass 2: wrap callbacks registered between plugins_loaded and init
+    add_action( 'init', function () use ( $collector, $min_callback_ms ) {
+        wp_flame_wrap_callbacks( $collector, $min_callback_ms );
+    }, 1 );
 }
 
 function wp_flame_shutdown(): void {
@@ -183,6 +197,59 @@ function wp_flame_shutdown(): void {
     global $wpdb;
     $storage = new WPFlame\Storage( $wpdb );
     $storage->save_trace( $trace );
+}
+
+/**
+ * Wrap registered WordPress hook callbacks with timing instrumentation.
+ * Iterates all hooks in $wp_filter and replaces each callback's function
+ * entry with a CallbackWrapper that adds span timing.
+ */
+function wp_flame_wrap_callbacks( WPFlame\Collector $collector, float $min_ms ): void {
+    foreach ( $GLOBALS['wp_filter'] as $hook_name => $hook_instance ) {
+        if ( ! ( $hook_instance instanceof \WP_Hook ) ) {
+            continue;
+        }
+
+        foreach ( $hook_instance->callbacks as $priority => $priority_callbacks ) {
+            foreach ( $priority_callbacks as $id => $the_ ) {
+                // Skip already-wrapped callbacks
+                if ( $the_['function'] instanceof WPFlame\CallbackWrapper ) {
+                    continue;
+                }
+
+                $original = $the_['function'];
+
+                // Skip our own plugin's callbacks to avoid self-instrumentation
+                $source = WPFlame\CallbackResolver::resolve_source( $id, $original, $collector );
+                if ( defined( 'WP_FLAME_DIR' ) ) {
+                    try {
+                        $filename = '';
+                        if ( is_string( $original ) && function_exists( $original ) ) {
+                            $filename = ( new \ReflectionFunction( $original ) )->getFileName();
+                        } elseif ( is_array( $original ) && isset( $original[0], $original[1] ) ) {
+                            $filename = ( new \ReflectionMethod( $original[0], $original[1] ) )->getFileName();
+                        } elseif ( $original instanceof \Closure ) {
+                            $filename = ( new \ReflectionFunction( $original ) )->getFileName();
+                        } elseif ( is_object( $original ) && method_exists( $original, '__invoke' ) ) {
+                            $filename = ( new \ReflectionMethod( $original, '__invoke' ) )->getFileName();
+                        }
+                        if ( $filename && strpos( $filename, WP_FLAME_DIR ) === 0 ) {
+                            continue;
+                        }
+                    } catch ( \ReflectionException $e ) {
+                        // Can't determine file — wrap it anyway
+                    }
+                }
+
+                $name = WPFlame\CallbackResolver::resolve_name( $id, $original );
+
+                $hook_instance->callbacks[ $priority ][ $id ]['function'] = new WPFlame\CallbackWrapper(
+                    $original, $collector, $hook_name, (int) $priority,
+                    $name, $source, $min_ms
+                );
+            }
+        }
+    }
 }
 
 // --- Cron handler ---
