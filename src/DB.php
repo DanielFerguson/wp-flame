@@ -1,0 +1,119 @@
+<?php
+
+declare(strict_types=1);
+
+namespace WPFlame;
+
+class DB extends \wpdb
+{
+    private Collector $collector;
+    private bool $full_query_text;
+
+    /**
+     * Create an instrumented DB instance from an existing wpdb.
+     */
+    public static function from_wpdb(\wpdb $original, Collector $collector): self
+    {
+        $reflection = new \ReflectionClass(self::class);
+        /** @var self $instance */
+        $instance = $reflection->newInstanceWithoutConstructor();
+
+        // Copy all properties from original
+        foreach (get_object_vars($original) as $key => $value) {
+            $instance->$key = $value;
+        }
+
+        $instance->collector = $collector;
+        $instance->full_query_text = (bool) get_option('wp_flame_full_query_text', false);
+
+        return $instance;
+    }
+
+    /**
+     * Check if $wpdb can be safely replaced.
+     */
+    public static function can_replace(\wpdb $wpdb): bool
+    {
+        return get_class($wpdb) === 'wpdb';
+    }
+
+    /**
+     * Override wpdb::query() to wrap with span timing.
+     *
+     * @param string $query
+     * @return int|bool
+     */
+    public function query($query)
+    {
+        $span_id = $this->collector->start_span(
+            $this->extract_query_type($query),
+            Span::TYPE_DB,
+            $this->get_caller_source(),
+            ['query' => $this->truncate_query($query)]
+        );
+
+        $result = parent::query($query);
+
+        $this->collector->end_span($span_id);
+
+        return $result;
+    }
+
+    /**
+     * Extract the SQL statement type (SELECT, INSERT, UPDATE, DELETE, etc.)
+     */
+    private function extract_query_type(string $query): string
+    {
+        $query = ltrim($query);
+        $first_word = strtoupper(strtok($query, " \t\n\r"));
+        $known_types = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'REPLACE', 'CREATE', 'ALTER', 'DROP', 'SHOW', 'SET'];
+
+        return in_array($first_word, $known_types, true) ? $first_word : 'QUERY';
+    }
+
+    /**
+     * Truncate query text based on settings.
+     */
+    private function truncate_query(string $query): string
+    {
+        if ($this->full_query_text) {
+            return $query;
+        }
+        return substr($query, 0, 200);
+    }
+
+    /**
+     * Determine the source of the query via backtrace.
+     */
+    private function get_caller_source(): string
+    {
+        $trace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 15);
+        $wp_flame_dir = dirname(__DIR__);
+
+        foreach ($trace as $frame) {
+            if (! isset($frame['file'])) {
+                continue;
+            }
+
+            $file = $frame['file'];
+
+            // Skip wp-includes, wp-admin, and our own plugin
+            if (defined('ABSPATH')) {
+                if (strpos($file, ABSPATH . 'wp-includes/') === 0) {
+                    continue;
+                }
+                if (strpos($file, ABSPATH . 'wp-admin/') === 0) {
+                    continue;
+                }
+            }
+            if (strpos($file, $wp_flame_dir) === 0) {
+                continue;
+            }
+
+            $source = $this->collector->get_source_from_file($file);
+            return $source['source'];
+        }
+
+        return 'wordpress';
+    }
+}
