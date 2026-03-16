@@ -185,8 +185,27 @@
     }
 
     function moveTooltip(e) {
-        tooltipEl.style.left = (e.pageX + 12) + 'px';
-        tooltipEl.style.top = (e.pageY - 10) + 'px';
+        var tipWidth = tooltipEl.offsetWidth;
+        var tipHeight = tooltipEl.offsetHeight;
+        var viewWidth = document.documentElement.clientWidth;
+        var viewHeight = document.documentElement.clientHeight;
+        var scrollX = window.pageXOffset;
+        var scrollY = window.pageYOffset;
+
+        // Position right of cursor by default, flip left if it would overflow
+        var left = e.pageX + 12;
+        if (left + tipWidth > scrollX + viewWidth) {
+            left = e.pageX - tipWidth - 12;
+        }
+
+        // Position above cursor if it would overflow bottom
+        var top = e.pageY - 10;
+        if (top + tipHeight > scrollY + viewHeight) {
+            top = e.pageY - tipHeight - 10;
+        }
+
+        tooltipEl.style.left = left + 'px';
+        tooltipEl.style.top = top + 'px';
     }
 
     function hideTooltip() {
