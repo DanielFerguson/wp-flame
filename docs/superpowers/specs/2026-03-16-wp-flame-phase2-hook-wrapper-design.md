@@ -79,15 +79,36 @@ Returns `['type' => Span::TYPE_*, 'source' => '...']`. Uses the same reflection 
 
 Cached in `private static array $source_cache` keyed by `$callback_id`. On reflection failure, returns `['type' => Span::TYPE_PHP, 'source' => 'unknown']`.
 
+**Two-level caching:** `Hook::$source_cache` is keyed by WordPress callback ID (from `_wp_filter_build_unique_id()` — avoids re-running reflection). `Collector::$source_cache` is keyed by file path (avoids re-running path matching). These serve different key spaces and both are needed. Both caches are `private static` arrays that live for the PHP process lifetime — this is correct for standard PHP-FPM where each request is a new process. Persistent runtimes (FrankenPHP, Swoole) would need a `reset()` mechanism, which is out of scope for Phase 2.
+
+**Callback ID format:** WordPress generates callback IDs via `_wp_filter_build_unique_id()`. For named functions: the function name string. For methods: `spl_object_hash($object) . method_name`. For closures: `spl_object_hash($closure)`. The ID is unique per callback registration, not per closure object — the same closure registered on two hooks gets different IDs. This is correct for cache key purposes.
+
 ### Collector Changes (`src/Collector.php`)
 
-Two additions. No changes to existing methods.
+Two additions. Existing method signatures and behaviour are unchanged, but `start_span()` gains one additional field in its stack entry.
 
 **1. `span_count_at_start` in stack entries:**
 
-`start_span()` now stores `'span_count_at_start' => count($this->spans)` in the lightweight stack entry. This tracks how many completed spans existed when this span was opened. Used by `end_span_filtered()` to detect whether child spans were created during this span's lifetime.
+`start_span()` adds `'span_count_at_start' => count($this->spans)` to the lightweight associative array pushed onto `$span_stack`. The updated push block:
+
+```php
+$this->span_stack[] = [
+    'id'                  => $id,
+    'name'                => $name,
+    'type'                => $type,
+    'source'              => $source,
+    'start_ms'            => $start_ms,
+    'meta'                => $meta,
+    'parent_id'           => $parent_id,
+    'span_count_at_start' => count($this->spans),
+];
+```
+
+This tracks how many completed spans existed when this span was opened. Used by `end_span_filtered()` to detect whether child spans were created during this span's lifetime.
 
 **2. New method: `end_span_filtered(?string $span_id, float $min_ms): void`**
+
+Must return early (no-op) if `$this->stopped` is true or `$this->span_stack` is empty — matching the guard already present in `end_span()`.
 
 Same stack-popping behavior as `end_span()`:
 - Pops the top entry from `$span_stack`
@@ -131,7 +152,11 @@ foreach ($GLOBALS['wp_filter'] as $hook_name => $hook_instance) {
 }
 ```
 
-The `instanceof` check makes the function idempotent — safe to call multiple times.
+The `instanceof` check makes the function idempotent — safe to call multiple times. `foreach` iterates a copy of the array; hooks added during iteration are intentionally deferred to the next pass.
+
+**Known limitation:** Hooks first registered between `plugins_loaded` priority 1 and the completion of Pass 1 may not be caught by either pass. In practice this window is negligible — the replacement loop completes in microseconds. Hooks registered during `after_setup_theme` or `init` priority > 0 callbacks are caught by Pass 2.
+
+**`do_action()` note:** `WP_Hook::do_action()` calls `apply_filters()` internally, so no separate override is needed for action hooks. Our `apply_filters()` override instruments both filters and actions.
 
 ### Settings
 
@@ -144,11 +169,13 @@ Read once in `wp_flame_init()`:
 $min_callback_ms = (float) get_option('wp_flame_min_callback_ms', 0.5);
 ```
 
+Added to activation defaults in `wp_flame_activate()`. Cleaned up by `uninstall.php` — the existing `DELETE WHERE option_name LIKE 'wp\_flame\_%'` wildcard already covers this option.
+
 ## File Changes
 
 **New files:**
 - `src/Hook.php` — the WP_Hook wrapper class
-- `tests/Unit/HookCallbackResolverTest.php` — unit tests for callback name/source resolution
+- `tests/Unit/HookTest.php` — unit tests for callback name/source resolution
 
 **Modified files:**
 - `src/Collector.php` — add `end_span_filtered()`, add `span_count_at_start` to stack entries
@@ -164,7 +191,7 @@ $min_callback_ms = (float) get_option('wp_flame_min_callback_ms', 0.5);
 - Stack nesting preserved correctly after discard
 - Discarded span's parent_id doesn't affect sibling spans
 
-**Unit tests for callback name resolution (`HookCallbackResolverTest`):**
+**Unit tests for callback name resolution (`HookTest`):**
 - Named function → `'function_name'`
 - Array instance method `[$obj, 'method']` → `'ClassName::method'`
 - Array static method `['Class', 'method']` → `'Class::method'`
@@ -184,9 +211,10 @@ $min_callback_ms = (float) get_option('wp_flame_min_callback_ms', 0.5);
 
 ## Performance Budget
 
-- Per-callback overhead (below threshold): 2x `microtime()` + 1 float subtraction + 1 comparison = ~0.1 microseconds
-- Per-callback overhead (above threshold): + reflection (first time only, cached after) + span creation = ~5 microseconds first call, ~1 microsecond cached
-- 500 callbacks on a typical page, 90% below threshold: ~0.05ms + ~0.05ms = ~0.1ms total
+- Per-callback overhead (below threshold, cached): 2x `microtime()` + name/source cache lookup + 1 float subtraction + 1 comparison = ~0.5 microseconds
+- Per-callback overhead (first call, any threshold): + reflection for name/source resolution = ~2-5 microseconds (amortized once per unique callback ID across the request)
+- Per-callback overhead (above threshold, cached): + span creation = ~1 microsecond additional
+- 500 callbacks on a typical page, ~300 unique callback IDs: ~0.15ms first-call reflection + ~0.25ms cached overhead = ~0.4ms total
 - Well within the <5ms overhead budget
 
 ## Risks
