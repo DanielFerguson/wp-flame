@@ -110,6 +110,8 @@ The runtime engine. Manages an internal span stack during the request. No I/O un
 - `end_span(?string $span_id = null): void` — pops stack top, calculates duration, creates immutable Span, stores in flat array. If `$span_id` provided, validates it matches stack top (logs warning if not).
 - `get_trace(): Trace` — builds Trace from completed spans + request metadata. Computes `query_count` (number of spans with `type === TYPE_DB`) and `total_query_ms` (sum of their `duration_ms`) from the spans array.
 - `is_initialized(): bool` — for graceful self-bootstrapping check
+- `stop(): void` — called after `get_trace()` at shutdown. Makes `start_span()` return a dummy ID and `end_span()` become a no-op. Prevents self-instrumentation when `Storage::save_trace()` triggers queries through the DB wrapper.
+- `static reset(): void` — nulls the singleton instance and all internal state. Used exclusively in tests to ensure each test case starts clean. Not called in production.
 
 **Internals:**
 - `$request_start` — float, microtime from `start_request()`
@@ -281,8 +283,9 @@ Render phase span ID is stored and explicitly closed by the shutdown handler (st
 3. Determine if this trace should be saved:
    - Check `wp_flame_enabled` option — if false, discard and return
    - Check admin status: use `$this->is_admin_request` flag, set at `init` time (priority 0) via `current_user_can('manage_options')`. This avoids relying on `current_user_can()` at shutdown where authentication context may be unreliable. If the flag was never set (request didn't reach `init` — e.g., early `wp_die()`, fatal error, or short-circuited request), discard. This is intentional: requests that don't complete the WordPress lifecycle produce incomplete traces that are not useful for profiling.
-4. Build Trace from Collector
-5. Pass to `Storage::save_trace()`
+4. Build Trace from Collector via `get_trace()`
+5. Call `Collector::instance()->stop()` — prevents self-instrumentation during save
+6. Pass to `Storage::save_trace()`
 
 **Admin detection (registered at `init`, priority 0):**
 The main plugin registers an `init` callback that checks `current_user_can('manage_options')` and stores the result as an instance property (`$this->is_admin_request`). This runs early when authentication is fully resolved. The shutdown handler reads this flag rather than calling `current_user_can()` directly.
@@ -336,7 +339,7 @@ Full TDD. Tests split into Unit (pure PHP, no WordPress dependency) and Integrat
 **Unit tests (no WordPress, no database):**
 - `SpanTest` — construction, immutability, `toArray()`/`fromArray()` round-trip, type constants
 - `TraceTest` — construction, serialization, span aggregation, `total_query_ms` and `query_count` computed from DB-type spans
-- `CollectorTest` — `start_span`/`end_span` nesting, parent assignment, `get_trace()` assembly, `is_initialized()`, unclosed span handling (safety net closes with `auto_closed` meta), source cache
+- `CollectorTest` — `start_span`/`end_span` nesting, parent assignment, `get_trace()` assembly, `is_initialized()`, `stop()` makes span methods no-op, unclosed span handling (safety net closes with `auto_closed` meta), source cache. Uses `Collector::reset()` in `tearDown()` to isolate tests.
 
 **Integration tests (require WordPress test framework):**
 - `StorageTest` — CRUD operations against real `$wpdb`, table creation via `dbDelta()`, pagination, pruning
