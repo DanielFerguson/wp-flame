@@ -102,7 +102,8 @@
         container.appendChild(probe);
         var width = probe.offsetWidth || 800;
         container.removeChild(probe);
-        var height = maxDepth * ROW_HEIGHT + AXIS_HEIGHT + 10;
+        var FULL_REQUEST_ROW = 1; // extra row for "Full request" bar
+        var height = (maxDepth + FULL_REQUEST_ROW) * ROW_HEIGHT + AXIS_HEIGHT + 10;
         var timeRange = viewEnd - viewStart;
 
         var svgParts = [];
@@ -121,6 +122,11 @@
             svgParts.push('<text x="' + tx.toFixed(1) + '" y="' + (AXIS_HEIGHT - 5) + '" fill="#888" font-size="10" font-family="monospace" text-anchor="' + anchor + '">' + tickLabel + '</text>');
         }
 
+        // "Full request" bar spanning the entire visible range
+        var frY = AXIS_HEIGHT;
+        svgParts.push('<rect x="0" y="' + frY + '" width="' + width + '" height="' + (ROW_HEIGHT - 2) + '" fill="#e0e0e0" rx="2" />');
+        svgParts.push('<text x="4" y="' + (frY + ROW_HEIGHT - 7) + '" fill="#444" font-size="11" font-family="monospace">Full request</text>');
+
         function renderSpan(s, depth) {
             var x = ((s.start_ms - viewStart) / timeRange) * width;
             var w = (s.duration_ms / timeRange) * width;
@@ -130,7 +136,7 @@
             // Skip spans entirely outside view
             if (x + w < 0 || x > width) return;
 
-            var y = depth * ROW_HEIGHT + AXIS_HEIGHT;
+            var y = (depth + FULL_REQUEST_ROW) * ROW_HEIGHT + AXIS_HEIGHT;
             var color = COLORS[s.type] || COLORS.php;
             var pct = trace.total_ms > 0 ? ((s.duration_ms / trace.total_ms) * 100).toFixed(1) : '0.0';
 

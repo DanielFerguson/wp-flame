@@ -3,9 +3,8 @@
 /* Summary stats bar */
 .wp-flame-summary {
     display: flex;
-    gap: 24px;
+    align-items: stretch;
     margin: 16px 0;
-    padding: 16px;
     background: #fff;
     border: 1px solid #c3c4c7;
     border-radius: 4px;
@@ -14,25 +13,42 @@
 .wp-flame-stat {
     display: flex;
     flex-direction: column;
+    padding: 16px 24px;
+    border-right: 1px solid #e0e0e0;
+}
+
+.wp-flame-stat:last-of-type {
+    border-right: none;
 }
 
 .wp-flame-stat-value {
-    font-size: 20px;
-    font-weight: 600;
+    font-size: 28px;
+    font-weight: 700;
     line-height: 1.2;
+    color: #1d2327;
 }
 
 .wp-flame-stat-label {
-    font-size: 12px;
-    color: #646970;
+    font-size: 11px;
+    color: #999;
     text-transform: uppercase;
     letter-spacing: 0.5px;
+    margin-bottom: 4px;
 }
 
 .wp-flame-stat-value small {
-    font-size: 14px;
+    font-size: 16px;
     font-weight: 400;
-    opacity: 0.6;
+    color: #999;
+}
+
+.wp-flame-stat-right {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    padding: 16px 24px;
+    color: #999;
+    font-size: 13px;
 }
 
 /* Color legend */

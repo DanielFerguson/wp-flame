@@ -172,11 +172,23 @@ class Admin
         echo ' &mdash; ' . esc_html($trace->method) . ' ' . esc_html($trace->url);
         echo '</h1>';
 
-        // Summary stats bar
+        // Summary stats bar — matches marketing mockup layout
         echo '<div class="wp-flame-summary">';
-        echo '<div class="wp-flame-stat"><span class="wp-flame-stat-value">' . esc_html(round($trace->total_ms, 1)) . '<small>ms</small></span><span class="wp-flame-stat-label">Total Time</span></div>';
-        echo '<div class="wp-flame-stat"><span class="wp-flame-stat-value">' . esc_html($trace->query_count) . ' <small>(' . esc_html(round($trace->total_query_ms, 1)) . 'ms)</small></span><span class="wp-flame-stat-label">DB Queries</span></div>';
-        echo '<div class="wp-flame-stat"><span class="wp-flame-stat-value">' . esc_html(round($trace->peak_memory / 1048576, 1)) . '<small>MB</small></span><span class="wp-flame-stat-label">Peak Memory</span></div>';
+        echo '<div class="wp-flame-stat">';
+        echo '<span class="wp-flame-stat-label">TOTAL TIME</span>';
+        echo '<span class="wp-flame-stat-value">' . esc_html(round($trace->total_ms)) . '<small>ms</small></span>';
+        echo '</div>';
+        echo '<div class="wp-flame-stat">';
+        echo '<span class="wp-flame-stat-label">DB QUERIES</span>';
+        echo '<span class="wp-flame-stat-value">' . esc_html($trace->query_count) . ' <small>(' . esc_html(round($trace->total_query_ms)) . 'ms)</small></span>';
+        echo '</div>';
+        echo '<div class="wp-flame-stat">';
+        echo '<span class="wp-flame-stat-label">PEAK MEMORY</span>';
+        echo '<span class="wp-flame-stat-value">' . esc_html(round($trace->peak_memory / 1048576)) . '<small>MB</small></span>';
+        echo '</div>';
+        echo '<div class="wp-flame-stat-right">';
+        echo esc_html($trace->method) . ' ' . esc_html($trace->url) . ' &mdash; ' . esc_html(round($trace->total_ms)) . 'ms';
+        echo '</div>';
         echo '</div>';
 
         // Color legend
