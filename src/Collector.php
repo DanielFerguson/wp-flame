@@ -12,7 +12,7 @@ class Collector
     private bool $initialized = false;
     private bool $stopped = false;
 
-    /** @var array[] Lightweight stack entries: [id, name, type, source, start_ms, meta, parent_id] */
+    /** @var array[] Lightweight stack entries: [id, name, type, source, start_ms, meta, parent_id, span_count_at_start] */
     private array $span_stack = [];
 
     /** @var Span[] Completed spans */
@@ -64,13 +64,14 @@ class Collector
         $start_ms = (microtime(true) - $this->request_start) * 1000;
 
         $this->span_stack[] = [
-            'id'        => $id,
-            'name'      => $name,
-            'type'      => $type,
-            'source'    => $source,
-            'start_ms'  => $start_ms,
-            'meta'      => $meta,
-            'parent_id' => $parent_id,
+            'id'                  => $id,
+            'name'                => $name,
+            'type'                => $type,
+            'source'              => $source,
+            'start_ms'            => $start_ms,
+            'meta'                => $meta,
+            'parent_id'           => $parent_id,
+            'span_count_at_start' => count($this->spans),
         ];
 
         return $id;
