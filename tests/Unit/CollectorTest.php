@@ -260,4 +260,96 @@ class CollectorTest extends TestCase
         $this->assertSame($first, $second);
         $this->assertSame(Span::TYPE_PHP, $first['type']);
     }
+
+    public function test_end_span_filtered_keeps_span_above_threshold(): void
+    {
+        $collector = Collector::instance();
+        $collector->start_request(microtime(true));
+
+        $id = $collector->start_span('Slow callback', Span::TYPE_PLUGIN, 'test');
+        usleep(2000); // 2ms
+        $collector->end_span_filtered($id, 0.5); // threshold 0.5ms
+
+        $trace = $collector->get_trace();
+        $this->assertCount(1, $trace->spans);
+        $this->assertSame('Slow callback', $trace->spans[0]->name);
+    }
+
+    public function test_end_span_filtered_discards_span_below_threshold_no_children(): void
+    {
+        $collector = Collector::instance();
+        $collector->start_request(microtime(true));
+
+        $id = $collector->start_span('Fast callback', Span::TYPE_PLUGIN, 'test');
+        // No usleep — effectively 0ms
+        $collector->end_span_filtered($id, 100.0); // threshold 100ms — will be below
+
+        $trace = $collector->get_trace();
+        $this->assertCount(0, $trace->spans);
+    }
+
+    public function test_end_span_filtered_keeps_span_below_threshold_with_children(): void
+    {
+        $collector = Collector::instance();
+        $collector->start_request(microtime(true));
+
+        $parent_id = $collector->start_span('Parent callback', Span::TYPE_PLUGIN, 'test');
+
+        // Create a child span that gets retained
+        $child_id = $collector->start_span('DB Query', Span::TYPE_DB, 'test');
+        usleep(2000); // 2ms
+        $collector->end_span($child_id); // Regular end_span — always kept
+
+        // Parent is below threshold but has a retained child
+        $collector->end_span_filtered($parent_id, 100.0);
+
+        $trace = $collector->get_trace();
+        $this->assertCount(2, $trace->spans);
+
+        $names = array_map(fn($s) => $s->name, $trace->spans);
+        $this->assertContains('Parent callback', $names);
+        $this->assertContains('DB Query', $names);
+    }
+
+    public function test_end_span_filtered_preserves_stack_nesting_after_discard(): void
+    {
+        $collector = Collector::instance();
+        $collector->start_request(microtime(true));
+
+        $outer = $collector->start_span('Outer', Span::TYPE_CORE, 'test');
+
+        // This callback span will be discarded
+        $fast = $collector->start_span('Fast', Span::TYPE_PLUGIN, 'test');
+        $collector->end_span_filtered($fast, 100.0);
+
+        // This span should still be a child of Outer, not Fast
+        $next = $collector->start_span('Next', Span::TYPE_PLUGIN, 'test');
+        usleep(1000);
+        $collector->end_span($next);
+
+        $collector->end_span($outer);
+
+        $trace = $collector->get_trace();
+        $this->assertCount(2, $trace->spans); // Outer + Next (Fast was discarded)
+
+        $spans_by_name = [];
+        foreach ($trace->spans as $s) {
+            $spans_by_name[$s->name] = $s;
+        }
+
+        $this->assertSame($outer, $spans_by_name['Next']->parent_id);
+    }
+
+    public function test_end_span_filtered_noop_when_stopped(): void
+    {
+        $collector = Collector::instance();
+        $collector->start_request(microtime(true));
+
+        $id = $collector->start_span('Before stop', Span::TYPE_PLUGIN, 'test');
+        $collector->stop();
+        $collector->end_span_filtered($id, 0.0);
+
+        $trace = $collector->get_trace();
+        $this->assertCount(0, $trace->spans);
+    }
 }

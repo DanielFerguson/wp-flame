@@ -108,6 +108,45 @@ class Collector
     }
 
     /**
+     * End a span with a minimum duration threshold.
+     * Discards spans below threshold unless they have retained child spans.
+     */
+    public function end_span_filtered(?string $span_id, float $min_ms): void
+    {
+        if ($this->stopped || empty($this->span_stack)) {
+            return;
+        }
+
+        $entry = array_pop($this->span_stack);
+
+        if ($span_id !== null && $entry['id'] !== $span_id) {
+            error_log(sprintf(
+                'WP Flame: end_span_filtered() ID mismatch — expected "%s", got "%s"',
+                $span_id,
+                $entry['id']
+            ));
+        }
+
+        $duration_ms = ((microtime(true) - $this->request_start) * 1000) - $entry['start_ms'];
+        $duration_ms = max(0.0, $duration_ms);
+
+        $has_retained_children = count($this->spans) > ($entry['span_count_at_start'] ?? 0);
+
+        if ($duration_ms >= $min_ms || $has_retained_children) {
+            $this->spans[] = new Span(
+                $entry['id'],
+                $entry['parent_id'],
+                $entry['name'],
+                $entry['type'],
+                $entry['source'],
+                $entry['start_ms'],
+                $duration_ms,
+                $entry['meta']
+            );
+        }
+    }
+
+    /**
      * Safety net: close all remaining open spans on the stack.
      * Each auto-closed span gets ['auto_closed' => true] in its meta.
      */
