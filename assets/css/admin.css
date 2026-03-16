@@ -78,7 +78,7 @@
 
 /* Tooltip */
 #wp-flame-tooltip {
-    position: absolute;
+    position: fixed;
     background: #1d2327;
     color: #fff;
     padding: 8px 12px;
