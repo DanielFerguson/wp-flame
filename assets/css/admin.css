@@ -41,7 +41,8 @@
     border: 1px solid #c3c4c7;
     border-radius: 4px;
     padding: 8px;
-    overflow-x: auto;
+    overflow: hidden;
+    box-sizing: border-box;
 }
 
 #wp-flame-graph svg {

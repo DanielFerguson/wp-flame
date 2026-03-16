@@ -81,10 +81,13 @@
     }
 
     function render() {
-        // clientWidth includes padding, so subtract it to fit within the content area
-        var style = window.getComputedStyle(container);
-        var padding = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
-        var width = (container.clientWidth - padding) || 800;
+        // Use a zero-height probe div to measure the actual content width
+        // (avoids clientWidth including padding and scrollbar width issues)
+        var probe = document.createElement('div');
+        probe.style.height = '0';
+        container.appendChild(probe);
+        var width = probe.offsetWidth || 800;
+        container.removeChild(probe);
         var height = maxDepth * ROW_HEIGHT + 10;
         var timeRange = viewEnd - viewStart;
 
