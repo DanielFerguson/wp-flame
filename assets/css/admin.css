@@ -29,6 +29,34 @@
     letter-spacing: 0.5px;
 }
 
+.wp-flame-stat-value small {
+    font-size: 14px;
+    font-weight: 400;
+    opacity: 0.6;
+}
+
+/* Color legend */
+.wp-flame-legend {
+    display: flex;
+    gap: 16px;
+    margin: 8px 0;
+    font-size: 12px;
+    color: #646970;
+}
+
+.wp-flame-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.wp-flame-legend-color {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 2px;
+}
+
 /* Trace list table */
 .wp-flame-traces .wp-flame-slow td {
     background-color: #fcf0f0;

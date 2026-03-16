@@ -174,10 +174,26 @@ class Admin
 
         // Summary stats bar
         echo '<div class="wp-flame-summary">';
-        echo '<div class="wp-flame-stat"><span class="wp-flame-stat-value">' . esc_html(round($trace->total_ms, 1)) . ' ms</span><span class="wp-flame-stat-label">Total</span></div>';
-        echo '<div class="wp-flame-stat"><span class="wp-flame-stat-value">' . esc_html(round($trace->total_query_ms, 1)) . ' ms</span><span class="wp-flame-stat-label">DB Time</span></div>';
-        echo '<div class="wp-flame-stat"><span class="wp-flame-stat-value">' . esc_html((string) $trace->query_count) . '</span><span class="wp-flame-stat-label">Queries</span></div>';
-        echo '<div class="wp-flame-stat"><span class="wp-flame-stat-value">' . esc_html(round($trace->peak_memory / 1048576, 1)) . ' MB</span><span class="wp-flame-stat-label">Peak Memory</span></div>';
+        echo '<div class="wp-flame-stat"><span class="wp-flame-stat-value">' . esc_html(round($trace->total_ms, 1)) . '<small>ms</small></span><span class="wp-flame-stat-label">Total Time</span></div>';
+        echo '<div class="wp-flame-stat"><span class="wp-flame-stat-value">' . esc_html($trace->query_count) . ' <small>(' . esc_html(round($trace->total_query_ms, 1)) . 'ms)</small></span><span class="wp-flame-stat-label">DB Queries</span></div>';
+        echo '<div class="wp-flame-stat"><span class="wp-flame-stat-value">' . esc_html(round($trace->peak_memory / 1048576, 1)) . '<small>MB</small></span><span class="wp-flame-stat-label">Peak Memory</span></div>';
+        echo '</div>';
+
+        // Color legend
+        echo '<div class="wp-flame-legend">';
+        $legend_items = [
+            ['color' => '#9e9e9e', 'label' => 'Core'],
+            ['color' => '#4285f4', 'label' => 'Plugins'],
+            ['color' => '#34a853', 'label' => 'Theme'],
+            ['color' => '#f4a742', 'label' => 'Database'],
+            ['color' => '#ea4335', 'label' => 'HTTP'],
+        ];
+        foreach ($legend_items as $item) {
+            echo '<span class="wp-flame-legend-item">';
+            echo '<span class="wp-flame-legend-color" style="background:' . esc_attr($item['color']) . '"></span>';
+            echo esc_html($item['label']);
+            echo '</span>';
+        }
         echo '</div>';
 
         // Flame graph container
