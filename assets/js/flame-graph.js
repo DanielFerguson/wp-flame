@@ -10,7 +10,7 @@
     var ROW_HEIGHT = 24;
     var MIN_WIDTH_PX = 2;
     var COLORS = {
-        core: '#4a4e69',
+        core: '#6c7086',
         plugin: '#7c3aed',
         theme: '#22c55e',
         db: '#ef4444',

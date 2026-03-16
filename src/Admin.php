@@ -194,7 +194,7 @@ class Admin
         // Color legend
         echo '<div class="wp-flame-legend">';
         $legend_items = [
-            ['color' => '#4a4e69', 'label' => 'Core'],
+            ['color' => '#6c7086', 'label' => 'Core'],
             ['color' => '#7c3aed', 'label' => 'Plugins'],
             ['color' => '#22c55e', 'label' => 'Theme'],
             ['color' => '#ef4444', 'label' => 'Database'],
