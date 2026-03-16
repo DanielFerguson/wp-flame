@@ -81,7 +81,10 @@
     }
 
     function render() {
-        var width = container.clientWidth || 800;
+        // clientWidth includes padding, so subtract it to fit within the content area
+        var style = window.getComputedStyle(container);
+        var padding = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
+        var width = (container.clientWidth - padding) || 800;
         var height = maxDepth * ROW_HEIGHT + 10;
         var timeRange = viewEnd - viewStart;
 
