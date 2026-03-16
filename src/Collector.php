@@ -37,6 +37,7 @@ class Collector
     {
         self::$instance = null;
         self::$source_cache = [];
+        CallbackResolver::reset();
     }
 
     public function start_request(float $microtime): void
