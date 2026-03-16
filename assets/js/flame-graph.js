@@ -10,12 +10,12 @@
     var ROW_HEIGHT = 24;
     var MIN_WIDTH_PX = 2;
     var COLORS = {
-        core: '#9e9e9e',
-        plugin: '#4285f4',
-        theme: '#34a853',
-        db: '#f4a742',
-        http: '#ea4335',
-        php: '#9c27b0'
+        core: '#4a4e69',
+        plugin: '#7c3aed',
+        theme: '#22c55e',
+        db: '#ef4444',
+        http: '#f59e0b',
+        php: '#8b5cf6'
     };
 
     var container = document.getElementById('wp-flame-graph');

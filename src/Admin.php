@@ -194,11 +194,11 @@ class Admin
         // Color legend
         echo '<div class="wp-flame-legend">';
         $legend_items = [
-            ['color' => '#9e9e9e', 'label' => 'Core'],
-            ['color' => '#4285f4', 'label' => 'Plugins'],
-            ['color' => '#34a853', 'label' => 'Theme'],
-            ['color' => '#f4a742', 'label' => 'Database'],
-            ['color' => '#ea4335', 'label' => 'HTTP'],
+            ['color' => '#4a4e69', 'label' => 'Core'],
+            ['color' => '#7c3aed', 'label' => 'Plugins'],
+            ['color' => '#22c55e', 'label' => 'Theme'],
+            ['color' => '#ef4444', 'label' => 'Database'],
+            ['color' => '#f59e0b', 'label' => 'External HTTP'],
         ];
         foreach ($legend_items as $item) {
             echo '<span class="wp-flame-legend-item">';
