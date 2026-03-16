@@ -10,7 +10,7 @@ Add per-callback instrumentation to the flame graph by wrapping individual callb
 
 **Approach: wrap callbacks in-place.** Instead of replacing `WP_Hook` instances, we iterate the `callbacks` public property and replace each callback's `function` entry with an invocable `CallbackWrapper` object. The `WP_Hook` instance stays completely untouched — it handles all iteration, nesting, and priority logic. We only touch the leaf-level callback functions.
 
-**Why `remove_filter()` still works:** `remove_filter()` looks up callbacks by the array key generated from `_wp_filter_build_unique_id()` at `add_filter()` time. We change the `function` value inside the entry but the key stays the same. So `remove_filter('init', [$obj, 'method'])` generates the same key and finds the entry correctly.
+**Why `remove_filter()` and `has_filter()` still work:** Both functions look up callbacks by the array key generated from `_wp_filter_build_unique_id()`. This key is set once at `add_filter()` time and stored as the array key in `$hook->callbacks[$priority][$key]`. Our wrapping changes only the `function` value inside the entry — the key is untouched. When `remove_filter('init', [$obj, 'method'])` is called, WordPress re-derives the key from `[$obj, 'method']` and looks it up — it matches because the key was set from the same original callback. The wrapped `CallbackWrapper` object is never used for key generation.
 
 ## Constraints
 
@@ -42,10 +42,8 @@ Name and source resolution happen at wrapping time (not at invocation time) — 
 
 **`__invoke(...$args)`:**
 ```php
-public function __invoke()
+public function __invoke(...$args)
 {
-    $args = func_get_args();
-
     $span_id = $this->collector->start_span(
         $this->span_name,
         $this->span_source['type'],
@@ -53,13 +51,17 @@ public function __invoke()
         ['hook' => $this->hook_name, 'priority' => $this->priority]
     );
 
-    $result = call_user_func_array($this->original, $args);
-
-    $this->collector->end_span_filtered($span_id, $this->min_duration_ms);
+    try {
+        $result = call_user_func_array($this->original, $args);
+    } finally {
+        $this->collector->end_span_filtered($span_id, $this->min_duration_ms);
+    }
 
     return $result;
 }
 ```
+
+Uses variadic `...$args` (PHP 7.4+ compatible) instead of `func_get_args()`. The `try/finally` ensures the span is always closed even if the original callback throws — the exception propagates normally but the Collector's span stack stays consistent.
 
 WP_Hook handles `accepted_args` slicing before calling our wrapper — we receive only the args intended for this callback and pass them through to the original.
 
@@ -97,7 +99,7 @@ Cached in `private static array $source_cache` keyed by `$callback_id`. On refle
 
 **Callback ID format:** WordPress generates callback IDs via `_wp_filter_build_unique_id()`. For named functions: the function name string. For methods: `spl_object_hash($object) . method_name`. For closures: `spl_object_hash($closure)`. The ID is unique per callback registration. Both caches are per-request (PHP process lifetime).
 
-**`static reset(): void`** — clears both caches. Called by `Collector::reset()` for test isolation.
+**`static reset(): void`** — clears `CallbackResolver::$name_cache` and `CallbackResolver::$source_cache` only. Does NOT clear `Collector::$source_cache` — that is independently managed by `Collector::reset()`. Called by `Collector::reset()` for test isolation.
 
 ### Collector Changes (`src/Collector.php`)
 
@@ -133,8 +135,8 @@ Same stack-popping behavior as `end_span()`:
 
 Conditional retention:
 - If `$duration_ms >= $min_ms` → create Span, add to `$this->spans` (same as `end_span`)
-- If `$duration_ms < $min_ms` AND `count($this->spans) > $entry['span_count_at_start']` → child spans were created during this callback, so keep the parent span to preserve tree structure
-- If `$duration_ms < $min_ms` AND no children → discard (don't add to `$this->spans`)
+- If `$duration_ms < $min_ms` AND `count($this->spans) > $entry['span_count_at_start']` → child spans were *retained* during this callback (i.e., they were above threshold or had their own children), so keep the parent span to preserve tree structure
+- If `$duration_ms < $min_ms` AND no retained children → discard (don't add to `$this->spans`). Note: if a child span was started and discarded by its own `end_span_filtered()` call, it does not count — "child" means a span that is actually in `$this->spans`.
 
 The stack is always popped regardless of whether the span is kept, so nesting remains correct for subsequent spans.
 
@@ -144,17 +146,32 @@ The stack is always popped regardless of whether the span is kept, so nesting re
 
 **Two wrapping passes:**
 
-**Pass 1: At `plugins_loaded` priority 0** (inside existing `wp_flame_init`):
+**Pass 1: At `plugins_loaded` priority 1** (registered inside `wp_flame_init`, fires after all priority-0 callbacks including `wp_flame_init` itself):
 ```php
-wp_flame_wrap_callbacks($collector, $min_callback_ms);
+add_action('plugins_loaded', function() use ($collector, $min_callback_ms) {
+    wp_flame_wrap_callbacks($collector, $min_callback_ms);
+}, 1);
 ```
 
-**Pass 2: At `init` priority 0** (new hook registration):
+**Pass 2: At `init` priority 1** (fires after WP Flame's own phase-transition callback at priority 0):
 ```php
 add_action('init', function() use ($collector, $min_callback_ms) {
     wp_flame_wrap_callbacks($collector, $min_callback_ms);
-}, 0);
+}, 1);
 ```
+
+**Why priority 1, not 0:** `wp_flame_init` runs at `plugins_loaded` priority 0 and registers phase-transition closures on `init`, `wp`, etc. at priority 0. If the wrapping pass also ran at priority 0, it would wrap WP Flame's own closures — causing self-instrumentation artifacts (WP Flame spans appearing inside callback spans). Running at priority 1 ensures all WP Flame closures are already registered and firing before wrapping begins.
+
+**Self-instrumentation exclusion:** Additionally, `wp_flame_wrap_callbacks()` skips callbacks whose source file is within `WP_FLAME_DIR`:
+
+```php
+$source = CallbackResolver::resolve_source($id, $original, $collector);
+if (strpos($source['source'], 'wp-flame') === 0 || $source['source'] === 'wordpress-apm-plugin') {
+    continue; // Don't wrap our own callbacks
+}
+```
+
+This provides a belt-and-suspenders defense against instrumenting our own plugin's callbacks.
 
 **`wp_flame_wrap_callbacks(Collector $collector, float $min_ms): void`**
 
@@ -270,7 +287,8 @@ Added to activation defaults in `wp_flame_activate()`. Cleaned up by `uninstall.
 | `has_filter()` returns wrong result | Same key-based lookup. Works correctly. |
 | Reflection throws on invalid callable | try/catch in CallbackResolver with fallback to callback ID. |
 | Plugin registers callback after both wrapping passes | Unwrapped callback runs normally (no timing). Not a correctness issue. |
-| By-reference args in `do_all_hook` | `do_all_hook` callbacks are not performance-critical. If args are passed by reference and our wrapper uses `func_get_args()`, references may not be preserved. Accept this limitation. |
+| By-reference args in `do_all_hook` | `do_all_hook` callbacks are not performance-critical. Variadic `...$args` may not preserve references. Accept this limitation. |
+| Wrapping during active hook iteration | Pass 1 runs during `plugins_loaded` while WP_Hook is mid-iteration for that hook. Wrapping modifies `function` values inside priority arrays of *other* hooks, not the currently-executing one. For the currently-executing hook (`plugins_loaded`), only higher-priority callbacks not yet fired are affected. PHP's single-threaded model ensures no concurrent modification. Safe in practice. |
 
 ## Relationship to Phase 1
 
