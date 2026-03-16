@@ -138,6 +138,17 @@ function wp_flame_init(): void {
     // HTTP request instrumentation
     new WPFlame\Http( $collector );
 
+    // Capture which template file WordPress selects for rendering
+    add_filter( 'template_include', function ( $template ) use ( $collector ) {
+        if ( isset( $GLOBALS['wp_flame_current_phase_id'] ) ) {
+            $name = basename( $template );
+            $collector->add_span_meta( $GLOBALS['wp_flame_current_phase_id'], [
+                'template' => $name,
+            ] );
+        }
+        return $template;
+    }, 9999 );
+
     // Set admin detection flag at init
     add_action( 'init', function () {
         $GLOBALS['wp_flame_is_admin_request'] = current_user_can( 'manage_options' );
