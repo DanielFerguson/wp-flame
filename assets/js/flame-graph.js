@@ -80,6 +80,20 @@
             .replace(/>/g, '&gt;');
     }
 
+    var AXIS_HEIGHT = 20; // px reserved at top for time axis
+
+    function niceTickInterval(range, targetTicks) {
+        var roughInterval = range / targetTicks;
+        var magnitude = Math.pow(10, Math.floor(Math.log(roughInterval) / Math.LN10));
+        var candidates = [1, 2, 5, 10];
+        var interval = magnitude;
+        for (var k = 0; k < candidates.length; k++) {
+            interval = candidates[k] * magnitude;
+            if (interval >= roughInterval) break;
+        }
+        return interval;
+    }
+
     function render() {
         // Use a zero-height probe div to measure the actual content width
         // (avoids clientWidth including padding and scrollbar width issues)
@@ -88,11 +102,24 @@
         container.appendChild(probe);
         var width = probe.offsetWidth || 800;
         container.removeChild(probe);
-        var height = maxDepth * ROW_HEIGHT + 10;
+        var height = maxDepth * ROW_HEIGHT + AXIS_HEIGHT + 10;
         var timeRange = viewEnd - viewStart;
 
         var svgParts = [];
         svgParts.push('<svg xmlns="http://www.w3.org/2000/svg" width="' + width + '" height="' + height + '" class="wp-flame-svg">');
+
+        // Time axis: tick marks and labels across the top AXIS_HEIGHT px
+        var tickInterval = niceTickInterval(timeRange, 6);
+        var firstTick = Math.ceil(viewStart / tickInterval) * tickInterval;
+        for (var t = firstTick; t <= viewEnd; t += tickInterval) {
+            var tx = ((t - viewStart) / timeRange) * width;
+            // Vertical guide line (full graph height, light grey)
+            svgParts.push('<line x1="' + tx.toFixed(1) + '" y1="' + AXIS_HEIGHT + '" x2="' + tx.toFixed(1) + '" y2="' + height + '" stroke="#ccc" stroke-width="0.5" opacity="0.5" />');
+            // Tick label
+            var tickLabel = Math.round(t) + 'ms';
+            var anchor = tx < 30 ? 'start' : (tx > width - 30 ? 'end' : 'middle');
+            svgParts.push('<text x="' + tx.toFixed(1) + '" y="' + (AXIS_HEIGHT - 5) + '" fill="#888" font-size="10" font-family="monospace" text-anchor="' + anchor + '">' + tickLabel + '</text>');
+        }
 
         function renderSpan(s, depth) {
             var x = ((s.start_ms - viewStart) / timeRange) * width;
@@ -103,7 +130,7 @@
             // Skip spans entirely outside view
             if (x + w < 0 || x > width) return;
 
-            var y = depth * ROW_HEIGHT;
+            var y = depth * ROW_HEIGHT + AXIS_HEIGHT;
             var color = COLORS[s.type] || COLORS.php;
             var pct = trace.total_ms > 0 ? ((s.duration_ms / trace.total_ms) * 100).toFixed(1) : '0.0';
 
