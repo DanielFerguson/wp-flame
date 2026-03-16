@@ -222,4 +222,42 @@ class CollectorTest extends TestCase
         $this->assertTrue($trace->spans[0]->meta['auto_closed']);
         $this->assertTrue($trace->spans[1]->meta['auto_closed']);
     }
+
+    public function test_get_source_from_plugin_file(): void
+    {
+        if (! defined('WP_PLUGIN_DIR')) {
+            define('WP_PLUGIN_DIR', '/var/www/html/wp-content/plugins');
+        }
+
+        $collector = Collector::instance();
+        $result = $collector->get_source_from_file('/var/www/html/wp-content/plugins/woocommerce/includes/class-wc-cart.php');
+
+        $this->assertSame(Span::TYPE_PLUGIN, $result['type']);
+        $this->assertSame('woocommerce', $result['source']);
+    }
+
+    public function test_get_source_from_core_file(): void
+    {
+        if (! defined('ABSPATH')) {
+            define('ABSPATH', '/var/www/html/');
+        }
+
+        $collector = Collector::instance();
+        $result = $collector->get_source_from_file('/var/www/html/wp-includes/post.php');
+
+        $this->assertSame(Span::TYPE_CORE, $result['type']);
+        $this->assertSame('wordpress', $result['source']);
+    }
+
+    public function test_get_source_caches_results(): void
+    {
+        $collector = Collector::instance();
+        $path = '/some/unknown/path/file.php';
+
+        $first = $collector->get_source_from_file($path);
+        $second = $collector->get_source_from_file($path);
+
+        $this->assertSame($first, $second);
+        $this->assertSame(Span::TYPE_PHP, $first['type']);
+    }
 }
