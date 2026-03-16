@@ -187,8 +187,13 @@ class Admin
 
         echo '</div>';
 
-        // Pass trace data to JS
-        wp_localize_script('wp-flame-graph', 'wpFlameTrace', $trace->toArray());
+        // Pass trace data to JS (wp_add_inline_script preserves numeric types;
+        // wp_localize_script would convert all values to strings, breaking .toFixed() calls)
+        wp_add_inline_script(
+            'wp-flame-graph',
+            'window.wpFlameTrace = ' . wp_json_encode($trace->toArray()) . ';',
+            'before'
+        );
     }
 
     public function enqueue_assets(string $hook): void

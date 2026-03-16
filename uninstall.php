@@ -18,7 +18,10 @@ $table = $wpdb->prefix . 'flame_traces';
 $wpdb->query( "DROP TABLE IF EXISTS {$table}" );
 
 // Delete all plugin options
-$wpdb->query( "DELETE FROM {$wpdb->options} WHERE option_name LIKE 'wp\_flame\_%'" );
+$wpdb->query( $wpdb->prepare(
+    "DELETE FROM {$wpdb->options} WHERE option_name LIKE %s",
+    'wp\_flame\_%'
+) );
 
 // Remove mu-plugin
 $mu_file = WPMU_PLUGIN_DIR . '/wp-flame-early-hooks.php';

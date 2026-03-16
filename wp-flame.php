@@ -86,11 +86,15 @@ function wp_flame_deactivate(): void {
 add_action( 'plugins_loaded', 'wp_flame_init', 0 );
 
 function wp_flame_init(): void {
+    $collector = WPFlame\Collector::instance();
+
     if ( ! get_option( 'wp_flame_enabled', true ) ) {
+        // Stop the collector if the mu-plugin already started it
+        if ( $collector->is_initialized() ) {
+            $collector->stop();
+        }
         return;
     }
-
-    $collector = WPFlame\Collector::instance();
 
     // Degraded mode: if mu-plugin didn't initialize the collector, start now
     if ( ! $collector->is_initialized() ) {
