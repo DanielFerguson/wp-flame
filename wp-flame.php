@@ -135,6 +135,9 @@ function wp_flame_init(): void {
         $GLOBALS['wpdb'] = WPFlame\DB::from_wpdb( $wpdb, $collector );
     }
 
+    // HTTP request instrumentation
+    new WPFlame\Http( $collector );
+
     // Set admin detection flag at init
     add_action( 'init', function () {
         $GLOBALS['wp_flame_is_admin_request'] = current_user_can( 'manage_options' );
