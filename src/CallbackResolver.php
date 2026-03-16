@@ -104,33 +104,32 @@ class CallbackResolver
 
     private static function get_callback_filename($callback): string
     {
+        $filename = false;
+
         if (is_string($callback) && strpos($callback, '::') !== false) {
             $parts = explode('::', $callback, 2);
             $ref = new \ReflectionMethod($parts[0], $parts[1]);
-            return $ref->getFileName();
-        }
-
-        if (is_string($callback) && function_exists($callback)) {
+            $filename = $ref->getFileName();
+        } elseif (is_string($callback) && function_exists($callback)) {
             $ref = new \ReflectionFunction($callback);
-            return $ref->getFileName();
-        }
-
-        if (is_array($callback) && isset($callback[0], $callback[1])) {
+            $filename = $ref->getFileName();
+        } elseif (is_array($callback) && isset($callback[0], $callback[1])) {
             $ref = new \ReflectionMethod($callback[0], $callback[1]);
-            return $ref->getFileName();
-        }
-
-        if ($callback instanceof \Closure) {
+            $filename = $ref->getFileName();
+        } elseif ($callback instanceof \Closure) {
             $ref = new \ReflectionFunction($callback);
-            return $ref->getFileName();
-        }
-
-        if (is_object($callback) && method_exists($callback, '__invoke')) {
+            $filename = $ref->getFileName();
+        } elseif (is_object($callback) && method_exists($callback, '__invoke')) {
             $ref = new \ReflectionMethod($callback, '__invoke');
-            return $ref->getFileName();
+            $filename = $ref->getFileName();
         }
 
-        throw new \ReflectionException('Cannot determine filename for callback');
+        // getFileName() returns false for built-in PHP functions (trim, array_map, etc.)
+        if ($filename === false) {
+            throw new \ReflectionException('Cannot determine filename for callback (built-in or internal)');
+        }
+
+        return $filename;
     }
 
     private static function short_class_name(string $fqcn): string
