@@ -352,4 +352,66 @@ class CollectorTest extends TestCase
         $trace = $collector->get_trace();
         $this->assertCount(0, $trace->spans);
     }
+
+    public function test_add_span_meta_merges_into_correct_span(): void
+    {
+        $collector = Collector::instance();
+        $collector->start_request(microtime(true));
+
+        $outer_id = $collector->start_span('Outer', Span::TYPE_CORE, 'test', ['existing' => 'value']);
+        $inner_id = $collector->start_span('Inner', Span::TYPE_HTTP, 'test', ['url' => 'https://example.com']);
+
+        $collector->add_span_meta($inner_id, ['status' => 200]);
+
+        $collector->end_span($inner_id);
+        $collector->end_span($outer_id);
+
+        $trace = $collector->get_trace();
+        $spans_by_name = [];
+        foreach ($trace->spans as $span) {
+            $spans_by_name[$span->name] = $span;
+        }
+
+        // Inner span should have merged meta
+        $this->assertSame('https://example.com', $spans_by_name['Inner']->meta['url']);
+        $this->assertSame(200, $spans_by_name['Inner']->meta['status']);
+
+        // Outer span should be unchanged
+        $this->assertSame('value', $spans_by_name['Outer']->meta['existing']);
+        $this->assertArrayNotHasKey('status', $spans_by_name['Outer']->meta);
+    }
+
+    public function test_add_span_meta_noop_when_stopped(): void
+    {
+        $collector = Collector::instance();
+        $collector->start_request(microtime(true));
+
+        $id = $collector->start_span('Span', Span::TYPE_HTTP, 'test', ['url' => 'https://example.com']);
+
+        $collector->stop();
+        $collector->add_span_meta($id, ['status' => 200]);
+
+        // Collector is stopped, so end_span is also a no-op — get_trace still works
+        $trace = $collector->get_trace();
+        $this->assertCount(0, $trace->spans);
+    }
+
+    public function test_add_span_meta_noop_when_span_id_not_found(): void
+    {
+        $collector = Collector::instance();
+        $collector->start_request(microtime(true));
+
+        $id = $collector->start_span('Span', Span::TYPE_HTTP, 'test', ['url' => 'https://example.com']);
+
+        // Call with a non-existent span ID — should not throw or corrupt state
+        $collector->add_span_meta('non-existent-span-id', ['status' => 404]);
+
+        $collector->end_span($id);
+
+        $trace = $collector->get_trace();
+        $this->assertCount(1, $trace->spans);
+        // The real span should not have the meta that was meant for the non-existent span
+        $this->assertArrayNotHasKey('status', $trace->spans[0]->meta);
+        $this->assertSame('https://example.com', $trace->spans[0]->meta['url']);
+    }
 }

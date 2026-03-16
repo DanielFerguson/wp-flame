@@ -189,6 +189,23 @@ class Collector
         );
     }
 
+    public function add_span_meta(string $span_id, array $additional_meta): void
+    {
+        if ($this->stopped) {
+            return;
+        }
+
+        for ($i = count($this->span_stack) - 1; $i >= 0; $i--) {
+            if ($this->span_stack[$i]['id'] === $span_id) {
+                $this->span_stack[$i]['meta'] = array_merge(
+                    $this->span_stack[$i]['meta'],
+                    $additional_meta
+                );
+                break;
+            }
+        }
+    }
+
     public function stop(): void
     {
         $this->stopped = true;
