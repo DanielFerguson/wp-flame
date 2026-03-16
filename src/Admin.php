@@ -185,6 +185,20 @@ class Admin
         echo '<div id="wp-flame-graph"></div>';
         echo '<div id="wp-flame-tooltip" style="display:none"></div>';
 
+        $insights = \WPFlame\Insights::analyze($trace);
+        if (!empty($insights)) {
+            echo '<div class="wp-flame-insights">';
+            echo '<h3>Insights</h3>';
+            foreach ($insights as $insight) {
+                $class = $insight['severity'] === 'warning' ? 'wp-flame-insight-warning' : 'wp-flame-insight-info';
+                echo '<div class="wp-flame-insight ' . esc_attr($class) . '">';
+                echo '<strong>' . esc_html($insight['title']) . '</strong>';
+                echo '<p>' . esc_html($insight['detail']) . '</p>';
+                echo '</div>';
+            }
+            echo '</div>';
+        }
+
         echo '</div>';
 
         // Pass trace data to JS (wp_add_inline_script preserves numeric types;
