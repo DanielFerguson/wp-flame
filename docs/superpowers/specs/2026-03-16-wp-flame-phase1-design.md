@@ -41,10 +41,10 @@ wp-flame/
     ├── Unit/
     │   ├── CollectorTest.php
     │   ├── SpanTest.php
-    │   ├── TraceTest.php
-    │   ├── StorageTest.php
-    │   └── DBTest.php
+    │   └── TraceTest.php
     └── Integration/
+        ├── StorageTest.php
+        ├── DBTest.php
         └── AdminTest.php
 ```
 
@@ -55,7 +55,7 @@ wp-flame/
 Constructed only at `end_span()` time — never exists in an incomplete state.
 
 **Fields:**
-- `id` — string, auto-generated UUID
+- `id` — string, generated via pure-PHP UUID v4 (`random_bytes(16)` based, no WordPress dependency — safe to call from mu-plugin before WordPress is fully loaded)
 - `parent_id` — string|null
 - `name` — string (e.g. "WooCommerce init")
 - `type` — string, one of class constants: `TYPE_CORE`, `TYPE_PLUGIN`, `TYPE_THEME`, `TYPE_DB`, `TYPE_HTTP`, `TYPE_PHP`
@@ -108,7 +108,7 @@ The runtime engine. Manages an internal span stack during the request. No I/O un
 - `start_request(float $microtime)` — records the zero-point timestamp
 - `start_span(string $name, string $type, string $source, array $meta = []): string` — pushes lightweight entry onto internal stack, auto-assigns parent from stack top, returns span ID
 - `end_span(?string $span_id = null): void` — pops stack top, calculates duration, creates immutable Span, stores in flat array. If `$span_id` provided, validates it matches stack top (logs warning if not).
-- `get_trace(): Trace` — builds Trace from completed spans + request metadata
+- `get_trace(): Trace` — builds Trace from completed spans + request metadata. Computes `query_count` (number of spans with `type === TYPE_DB`) and `total_query_ms` (sum of their `duration_ms`) from the spans array.
 - `is_initialized(): bool` — for graceful self-bootstrapping check
 
 **Internals:**
@@ -118,9 +118,9 @@ The runtime engine. Manages an internal span stack during the request. No I/O un
 - `$source_cache` — static array mapping file path → source attribution result
 
 **Source attribution:**
-- `get_source_from_file(string $file_path): array` — returns `['type' => 'plugin', 'source' => 'woocommerce/woocommerce.php']`
+- `public get_source_from_file(string $file_path): array` — returns `['type' => 'plugin', 'source' => 'woocommerce/woocommerce.php']`
 - Matches against `WP_PLUGIN_DIR`, `get_template_directory()`, `WPMU_PLUGIN_DIR`, `ABSPATH`
-- Results cached in `$source_cache`
+- Results cached internally in `$source_cache` — callers (including `DB::get_caller_source()`) do not maintain their own cache, they call `$this->collector->get_source_from_file($file)` which handles caching
 
 ### Storage (instance class)
 
@@ -146,12 +146,12 @@ Persistence layer for traces. Receives `$wpdb` via constructor for testability.
 - `create_table(): void` — uses `dbDelta()`, called on activation
 - `save_trace(Trace $trace): void` — JSON-serializes trace, inserts row
 - `get_trace(string $trace_id): ?Trace` — fetches single, deserializes JSON back into Trace/Span objects
-- `list_traces(array $args): array` — paginated list with filters (url LIKE, min duration, date range). Returns lightweight rows without `trace_data` column.
-- `count_traces(array $filters): int` — total count for pagination
+- `list_traces(array $filters): array` — paginated list with filters. Returns array of associative arrays with keys: `trace_id`, `url`, `method`, `total_ms`, `query_count`, `peak_memory`, `created_at` (no `trace_data` column). Supported `$filters` keys: `url` (string, LIKE match), `min_duration` (float, ms), `after`/`before` (string, datetime), `per_page` (int, default 20), `page` (int, default 1).
+- `count_traces(array $filters): int` — total count for pagination. Accepts the same `$filters` keys as `list_traces()` (excluding `per_page`/`page`).
 - `delete_trace(string $trace_id): void` — single delete
-- `prune_old(int $days): void` — `DELETE WHERE created_at < NOW() - INTERVAL $days DAY`
+- `prune_old(int $days): void` — `$wpdb->prepare("DELETE FROM {table} WHERE created_at < DATE_SUB(NOW(), INTERVAL %d DAY)", $days)`
 
-All queries use `$wpdb->prepare()`.
+All queries use `$wpdb->prepare()`. The INTERVAL syntax with `%d` placeholder is safe.
 
 **Size estimate:** ~15-30KB per trace (100 spans). 1000 traces = 15-30MB. Daily cron prune keeps this bounded.
 
@@ -160,9 +160,10 @@ All queries use `$wpdb->prepare()`.
 Database query instrumentation. Wraps `$wpdb->query()` with span timing.
 
 **Factory:** `static from_wpdb(\wpdb $original, Collector $collector): self`
-- Creates new instance without connecting
-- Copies ALL properties from original via `get_object_vars($original)` — future-proof, includes connection handle
+- Uses `ReflectionClass::newInstanceWithoutConstructor()` to create the instance without triggering `wpdb::__construct()` (which would attempt a new DB connection and run setup queries)
+- Copies ALL properties from original via `get_object_vars($original)` — future-proof, includes the existing connection handle (`dbh`), table names, prefix, charset
 - Stores reference to Collector
+- The original `$wpdb` instance is no longer used after replacement
 
 **Conflict detection:** Before replacing `$wpdb`, check `get_class($wpdb) !== 'wpdb'`. If another plugin already replaced it, skip and show admin notice.
 
@@ -183,7 +184,7 @@ public function query($query) {
 
 **Source attribution:** `get_caller_source()` uses `debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 15)` to find the first file outside `wp-includes/` and the wp-flame plugin directory. Result passed through `Collector::get_source_from_file()` and cached by caller file path.
 
-**Query text:** First 200 characters stored by default. `wp_flame_full_query_text` option (default false) controls full capture.
+**Query text:** First 200 characters stored by default. The `wp_flame_full_query_text` option (default false) controls full capture. This option is read once at construction time (in `from_wpdb()`) and stored as an instance property — not re-read on every query call.
 
 ### Admin (instance class)
 
@@ -227,7 +228,7 @@ Admin UI: trace list and flame graph view. Server-rendered, no REST API.
 - Reads `window.wpFlameTrace` (set by `wp_localize_script`)
 - Builds span tree from flat array using `parent_id` references
 - Calculates x position and width from `start_ms` and `duration_ms` relative to the visible time range
-- Row height fixed at ~20px per level
+- Row height fixed at 24px per level
 
 ## mu-plugin Design
 
@@ -258,7 +259,7 @@ $collector->start_span( 'Bootstrap', WPFlame\Span::TYPE_CORE, 'wordpress' );
 | `wp` | 0 | Close Routing, open Main Query |
 | `template_redirect` | 0 | Close Main Query, open Render |
 
-Render phase is closed by the shutdown handler.
+Render phase span ID is stored and explicitly closed by the shutdown handler (step 1) before any save logic runs, ensuring the Render duration does not include trace persistence overhead.
 
 **Degraded mode (no mu-plugin):** Main plugin initializes Collector at `plugins_loaded` priority 0 with `microtime(true)` as start time. Registers phase transitions from Theme Setup onward. Bootstrap and Plugin Load phases are not captured. Admin notice displayed.
 
@@ -275,16 +276,27 @@ Render phase is closed by the shutdown handler.
 
 ### Shutdown handler (priority 9999)
 
-1. Close any open spans (safety net)
-2. Check `current_user_can('manage_options')` — if false, discard and return
-3. Check `wp_flame_enabled` option — if false, return
+1. Explicitly close the Render phase span via `end_span($render_span_id)` — this records the Render duration accurately *before* any save overhead
+2. Close any remaining open spans (safety net): iterate the span stack from top to bottom, calling `end_span()` for each with the current `microtime(true)`. Each safety-net-closed span gets `['auto_closed' => true]` added to its meta for debugging
+3. Determine if this trace should be saved:
+   - Check `wp_flame_enabled` option — if false, discard and return
+   - Check admin status: use `$this->is_admin_request` flag, set at `init` time (priority 0) via `current_user_can('manage_options')`. This avoids relying on `current_user_can()` at shutdown where authentication context may be unreliable. If the flag was never set (request didn't reach `init`), discard.
 4. Build Trace from Collector
 5. Pass to `Storage::save_trace()`
+
+**Admin detection (registered at `init`, priority 0):**
+The main plugin registers an `init` callback that checks `current_user_can('manage_options')` and stores the result as an instance property (`$this->is_admin_request`). This runs early when authentication is fully resolved. The shutdown handler reads this flag rather than calling `current_user_can()` directly.
+
+**Page caching note:** If a full-page cache (e.g. WP Super Cache, Varnish) serves the response before WordPress executes, no spans are collected and no trace is saved. This is expected — cached responses don't execute PHP and don't need profiling. The plugin only traces requests that actually run through WordPress.
 
 ### Activation hook
 
 1. `Storage::create_table()` via `dbDelta()`
-2. Copy `mu-plugin/wp-flame-early-hooks.php` to `wp-content/mu-plugins/`
+2. Attempt to copy `mu-plugin/wp-flame-early-hooks.php` to `wp-content/mu-plugins/`:
+   - Create `wp-content/mu-plugins/` directory if it doesn't exist
+   - Call `copy()` and check return value
+   - If copy fails (non-writable directory, managed host restrictions): set `wp_flame_mu_plugin_failed` option to `true`. Activation does NOT abort — the plugin activates in degraded mode.
+   - If copy succeeds: delete `wp_flame_mu_plugin_failed` option if it exists
 3. Schedule daily cron `wp_flame_prune_traces`
 4. Set default options: `wp_flame_retention_days` = 7, `wp_flame_enabled` = true
 
@@ -308,6 +320,10 @@ Stored in `wp_options`, no settings page UI. Defaults set on activation:
 - `wp_flame_retention_days` — int, default 7
 - `wp_flame_full_query_text` — bool, default false
 
+## Relationship to README
+
+This spec supersedes the README's Phase 1 section (Section 8, "SLC specification") for implementation purposes. Where there are discrepancies (e.g., URL parameter naming, REST API inclusion), this spec takes precedence. The README remains the canonical reference for Phase 2 and Phase 3 scope.
+
 ## Dropped from Original Phase 1 Spec
 
 - **P1.3 (Individual plugin load timing)** — deferred to Phase 2. The WP_Hook wrapper provides per-callback granularity which is more useful than per-file load timing. Phase 1 captures the aggregate Plugin Load phase duration.
@@ -315,18 +331,19 @@ Stored in `wp_options`, no settings page UI. Defaults set on activation:
 
 ## Testing Strategy
 
-Full TDD. Tests split into Unit (no WordPress dependency) and Integration (WordPress test framework).
+Full TDD. Tests split into Unit (pure PHP, no WordPress dependency) and Integration (WordPress test framework with `$wpdb` and WordPress APIs).
 
-**Unit tests (no WordPress):**
+**Unit tests (no WordPress, no database):**
 - `SpanTest` — construction, immutability, `toArray()`/`fromArray()` round-trip, type constants
-- `TraceTest` — construction, serialization, span aggregation
-- `CollectorTest` — `start_span`/`end_span` nesting, parent assignment, `get_trace()` assembly, `is_initialized()`, unclosed span handling, source cache
-- `StorageTest` — requires WordPress test framework for `$wpdb` (technically integration, but tests the class in isolation)
-- `DBTest` — requires WordPress test framework for `$wpdb`
+- `TraceTest` — construction, serialization, span aggregation, `total_query_ms` and `query_count` computed from DB-type spans
+- `CollectorTest` — `start_span`/`end_span` nesting, parent assignment, `get_trace()` assembly, `is_initialized()`, unclosed span handling (safety net closes with `auto_closed` meta), source cache
 
-**Integration tests:**
+**Integration tests (require WordPress test framework):**
+- `StorageTest` — CRUD operations against real `$wpdb`, table creation via `dbDelta()`, pagination, pruning
+- `DBTest` — query wrapping, span creation per query, source attribution, conflict detection
 - `AdminTest` — menu registration, page rendering, nonce verification on delete
 
 **Test environment:**
 - `wp-env` or `wordpress/env` Docker-based setup via Composer dev dependency
-- `phpunit.xml` configured with WordPress test bootstrap
+- `phpunit.xml` with two test suites: `unit` (no WordPress bootstrap) and `integration` (WordPress test bootstrap)
+- Unit tests can run standalone with just `composer install && phpunit --testsuite unit`
