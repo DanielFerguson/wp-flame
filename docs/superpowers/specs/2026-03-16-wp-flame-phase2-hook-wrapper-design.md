@@ -1,61 +1,75 @@
-# WP Flame Phase 2.1 Design Spec: WP_Hook Wrapper
+# WP Flame Phase 2.1 Design Spec: Per-Callback Instrumentation
 
 ## Overview
 
-Add per-callback instrumentation to the flame graph by extending `WP_Hook` and wrapping each callback with span timing. This transforms the flame graph from showing only lifecycle phases and DB queries to showing individual plugin/theme callback execution within each hook — e.g., "Yoast's `wpseo_head` callback took 22ms within the `wp_head` action."
+Add per-callback instrumentation to the flame graph by wrapping individual callback functions registered on WordPress hooks. This transforms the flame graph from showing only lifecycle phases and DB queries to showing individual plugin/theme callback execution within each hook — e.g., "Yoast's `wpseo_head` callback took 22ms within the `wp_head` action."
+
+## Critical Design Constraint
+
+**`WP_Hook` is `final` in WordPress 6.7+.** It cannot be extended. Its `iterations`, `current_priority`, and `nesting_level` properties are `private` — inaccessible to subclasses even if `final` were removed.
+
+**Approach: wrap callbacks in-place.** Instead of replacing `WP_Hook` instances, we iterate the `callbacks` public property and replace each callback's `function` entry with an invocable `CallbackWrapper` object. The `WP_Hook` instance stays completely untouched — it handles all iteration, nesting, and priority logic. We only touch the leaf-level callback functions.
+
+**Why `remove_filter()` still works:** `remove_filter()` looks up callbacks by the array key generated from `_wp_filter_build_unique_id()` at `add_filter()` time. We change the `function` value inside the entry but the key stays the same. So `remove_filter('init', [$obj, 'method'])` generates the same key and finds the entry correctly.
 
 ## Constraints
 
 - Same as Phase 1: PHP 7.4+, WordPress 6.0+, full TDD
 - Must not break existing Phase 1 functionality
 - Must not crash the site if a callback is invalid or reflection fails
-- Overhead target: <0.1ms total for below-threshold callbacks on a typical page (~500 callbacks)
+- Overhead target: <0.5ms total for all callback wrapping on a typical page (~500 callbacks)
 
 ## Component Designs
 
-### Hook Class (`src/Hook.php`)
+### CallbackWrapper (`src/CallbackWrapper.php`)
 
-**Class:** `WPFlame\Hook` extends `\WP_Hook`
+**Class:** `WPFlame\CallbackWrapper` — an invocable object that wraps a single WordPress hook callback with span timing.
 
-Overrides `apply_filters()` to wrap each callback invocation with span timing. The override copies WordPress's `WP_Hook::apply_filters()` implementation and adds `start_span()`/`end_span_filtered()` around the `call_user_func_array()` call. This is the same approach used by Query Monitor — proven on millions of sites since WordPress 4.7.
-
-**Constructor properties (set via factory):**
-- `private Collector $collector`
-- `private string $hook_name` — the hook this instance handles (e.g., `init`, `wp_head`)
-- `private float $min_duration_ms` — threshold below which spans are discarded (default 0.5)
-
-**Factory:** `static from_wp_hook(\WP_Hook $original, string $hook_name, Collector $collector, float $min_ms): self`
-- Creates a new `Hook` instance
-- Copies all public properties from the original: `callbacks`, `iterations`, `current_priority`, `nesting_level`, `doing_action`
-- Stores hook name, Collector reference, and threshold
-- Returns the replacement instance
-
-**`apply_filters($value, $args)` override:**
-
-Copies the WordPress `WP_Hook::apply_filters()` implementation verbatim, adding timing around the `call_user_func_array()` call:
-
+**Constructor:**
 ```php
-// Before the callback:
-$callback_id = $id; // WordPress's internal callback array key
-$span_name = $this->get_callback_name($callback_id, $the_['function']);
-$span_source = $this->get_callback_source($callback_id, $the_['function']);
-$span_id = $this->collector->start_span(
-    $span_name,
-    $span_source['type'],
-    $span_source['source'],
-    ['hook' => $this->hook_name, 'priority' => $priority]
-);
-
-// Original callback invocation:
-$value = call_user_func_array($the_['function'], $args);
-
-// After the callback:
-$this->collector->end_span_filtered($span_id, $this->min_duration_ms);
+public function __construct(
+    $original,              // The original callback (any callable)
+    Collector $collector,
+    string $hook_name,
+    int $priority,
+    string $span_name,      // Pre-resolved callback name
+    array $span_source,     // Pre-resolved ['type' => ..., 'source' => ...]
+    float $min_duration_ms
+)
 ```
 
-The `start_span()`/`end_span_filtered()` pattern ensures correct parent/child nesting. Any DB queries triggered inside the callback become children of the callback's span on the Collector's stack.
+Name and source resolution happen at wrapping time (not at invocation time) — so the reflection cost is paid once during the replacement pass, not on every callback invocation.
 
-**Callback name resolution:** `private get_callback_name(string $callback_id, $callback): string`
+**`__invoke(...$args)`:**
+```php
+public function __invoke()
+{
+    $args = func_get_args();
+
+    $span_id = $this->collector->start_span(
+        $this->span_name,
+        $this->span_source['type'],
+        $this->span_source['source'],
+        ['hook' => $this->hook_name, 'priority' => $this->priority]
+    );
+
+    $result = call_user_func_array($this->original, $args);
+
+    $this->collector->end_span_filtered($span_id, $this->min_duration_ms);
+
+    return $result;
+}
+```
+
+WP_Hook handles `accepted_args` slicing before calling our wrapper — we receive only the args intended for this callback and pass them through to the original.
+
+**`get_original()`** — public method returning the original callback. Useful for debugging and for detecting already-wrapped callbacks.
+
+### CallbackResolver (`src/CallbackResolver.php`)
+
+**Class:** `WPFlame\CallbackResolver` — static utility class for resolving callback names and sources. Separated from CallbackWrapper to keep the wrapper lightweight and make the resolver independently testable.
+
+**`static resolve_name(string $callback_id, $callback): string`**
 
 Resolves a human-readable name from the callback. Cached in `private static array $name_cache` keyed by `$callback_id`.
 
@@ -73,15 +87,17 @@ All reflection is wrapped in `try/catch (\ReflectionException $e)`. Failures fal
 
 For closures, the filepath is made relative to `WP_PLUGIN_DIR`, `get_template_directory()`, or `ABSPATH` for readability.
 
-**Callback source resolution:** `private get_callback_source(string $callback_id, $callback): array`
+**`static resolve_source(string $callback_id, $callback, Collector $collector): array`**
 
-Returns `['type' => Span::TYPE_*, 'source' => '...']`. Uses the same reflection to get the filename, then delegates to `$this->collector->get_source_from_file($filename)` which handles caching internally.
+Returns `['type' => Span::TYPE_*, 'source' => '...']`. Uses reflection to get the filename, then delegates to `$collector->get_source_from_file($filename)` which handles file-path-level caching internally.
 
 Cached in `private static array $source_cache` keyed by `$callback_id`. On reflection failure, returns `['type' => Span::TYPE_PHP, 'source' => 'unknown']`.
 
-**Two-level caching:** `Hook::$source_cache` is keyed by WordPress callback ID (from `_wp_filter_build_unique_id()` — avoids re-running reflection). `Collector::$source_cache` is keyed by file path (avoids re-running path matching). These serve different key spaces and both are needed. Both caches are `private static` arrays that live for the PHP process lifetime — this is correct for standard PHP-FPM where each request is a new process. Persistent runtimes (FrankenPHP, Swoole) would need a `reset()` mechanism, which is out of scope for Phase 2.
+**Two-level caching:** `CallbackResolver::$source_cache` is keyed by WordPress callback ID (avoids re-running reflection). `Collector::$source_cache` is keyed by file path (avoids re-running path matching). These serve different key spaces and both are needed.
 
-**Callback ID format:** WordPress generates callback IDs via `_wp_filter_build_unique_id()`. For named functions: the function name string. For methods: `spl_object_hash($object) . method_name`. For closures: `spl_object_hash($closure)`. The ID is unique per callback registration, not per closure object — the same closure registered on two hooks gets different IDs. This is correct for cache key purposes.
+**Callback ID format:** WordPress generates callback IDs via `_wp_filter_build_unique_id()`. For named functions: the function name string. For methods: `spl_object_hash($object) . method_name`. For closures: `spl_object_hash($closure)`. The ID is unique per callback registration. Both caches are per-request (PHP process lifetime).
+
+**`static reset(): void`** — clears both caches. Called by `Collector::reset()` for test isolation.
 
 ### Collector Changes (`src/Collector.php`)
 
@@ -122,41 +138,60 @@ Conditional retention:
 
 The stack is always popped regardless of whether the span is kept, so nesting remains correct for subsequent spans.
 
-### Hook Replacement (`wp-flame.php`)
+**3. Update `reset()` to also call `CallbackResolver::reset()`** — ensures test isolation for the resolver's static caches.
 
-**Two replacement passes** in `wp_flame_init()`:
+### Callback Wrapping (`wp-flame.php`)
+
+**Two wrapping passes:**
 
 **Pass 1: At `plugins_loaded` priority 0** (inside existing `wp_flame_init`):
 ```php
-wp_flame_replace_hooks($collector, $min_callback_ms);
+wp_flame_wrap_callbacks($collector, $min_callback_ms);
 ```
 
 **Pass 2: At `init` priority 0** (new hook registration):
 ```php
 add_action('init', function() use ($collector, $min_callback_ms) {
-    wp_flame_replace_hooks($collector, $min_callback_ms);
+    wp_flame_wrap_callbacks($collector, $min_callback_ms);
 }, 0);
 ```
 
-**`wp_flame_replace_hooks(Collector $collector, float $min_ms): void`**
+**`wp_flame_wrap_callbacks(Collector $collector, float $min_ms): void`**
 
-Iterates `$GLOBALS['wp_filter']` and replaces each `WP_Hook` instance that isn't already a `Hook` instance:
+Iterates `$GLOBALS['wp_filter']` and wraps each callback that isn't already wrapped:
 
 ```php
-foreach ($GLOBALS['wp_filter'] as $hook_name => $hook_instance) {
-    if ($hook_instance instanceof \WP_Hook && !($hook_instance instanceof \WPFlame\Hook)) {
-        $GLOBALS['wp_filter'][$hook_name] = Hook::from_wp_hook(
-            $hook_instance, $hook_name, $collector, $min_ms
-        );
+function wp_flame_wrap_callbacks(Collector $collector, float $min_ms): void {
+    foreach ($GLOBALS['wp_filter'] as $hook_name => $hook_instance) {
+        if (! ($hook_instance instanceof \WP_Hook)) {
+            continue;
+        }
+
+        foreach ($hook_instance->callbacks as $priority => $priority_callbacks) {
+            foreach ($priority_callbacks as $id => $the_) {
+                // Skip already-wrapped callbacks
+                if ($the_['function'] instanceof \WPFlame\CallbackWrapper) {
+                    continue;
+                }
+
+                $original = $the_['function'];
+
+                $name = CallbackResolver::resolve_name($id, $original);
+                $source = CallbackResolver::resolve_source($id, $original, $collector);
+
+                $hook_instance->callbacks[$priority][$id]['function'] = new CallbackWrapper(
+                    $original, $collector, $hook_name, (int) $priority,
+                    $name, $source, $min_ms
+                );
+            }
+        }
     }
 }
 ```
 
-The `instanceof` check makes the function idempotent — safe to call multiple times. `foreach` iterates a copy of the array; hooks added during iteration are intentionally deferred to the next pass.
+The `instanceof CallbackWrapper` check makes the function idempotent — safe to call multiple times. `foreach` on the outer array iterates a copy; modifications to inner arrays go directly to the WP_Hook instance via the `$hook_instance` reference.
 
-**Known limitation:** Hooks first registered between `plugins_loaded` priority 1 and the completion of Pass 1 may not be caught by either pass. In practice this window is negligible — the replacement loop completes in microseconds. Hooks registered during `after_setup_theme` or `init` priority > 0 callbacks are caught by Pass 2.
-
-**`do_action()` note:** `WP_Hook::do_action()` calls `apply_filters()` internally, so no separate override is needed for action hooks. Our `apply_filters()` override instruments both filters and actions.
+**Known limitation:** Callbacks registered after both passes complete (e.g., during `init` priority > 0) won't be wrapped. These are typically admin-specific or late-registration callbacks. The majority of performance-critical callbacks are registered by `init` time.
 
 ### Settings
 
@@ -174,24 +209,26 @@ Added to activation defaults in `wp_flame_activate()`. Cleaned up by `uninstall.
 ## File Changes
 
 **New files:**
-- `src/Hook.php` — the WP_Hook wrapper class
-- `tests/Unit/HookTest.php` — unit tests for callback name/source resolution
+- `src/CallbackWrapper.php` — invocable timing wrapper for individual callbacks
+- `src/CallbackResolver.php` — static utility for callback name/source resolution
+- `tests/Unit/CallbackResolverTest.php` — unit tests for name/source resolution
+- `tests/Unit/CallbackWrapperTest.php` — unit tests for the wrapper invocation
 
 **Modified files:**
-- `src/Collector.php` — add `end_span_filtered()`, add `span_count_at_start` to stack entries
-- `wp-flame.php` — add `wp_flame_replace_hooks()` function, call it at `plugins_loaded` and `init`
+- `src/Collector.php` — add `end_span_filtered()`, add `span_count_at_start` to stack entries, update `reset()` to clear resolver caches
+- `wp-flame.php` — add `wp_flame_wrap_callbacks()` function, call it at `plugins_loaded` and `init`, add `wp_flame_min_callback_ms` to activation defaults
 - `tests/Unit/CollectorTest.php` — add tests for `end_span_filtered()`
 
 ## Testing Strategy
 
-**Unit tests for `Collector::end_span_filtered()`:**
+**Unit tests for `Collector::end_span_filtered()` (`CollectorTest`):**
 - Span above threshold → kept in trace
 - Span below threshold, no children → discarded from trace
 - Span below threshold, has child spans → kept to preserve tree
 - Stack nesting preserved correctly after discard
-- Discarded span's parent_id doesn't affect sibling spans
+- Stopped collector returns early (no-op)
 
-**Unit tests for callback name resolution (`HookTest`):**
+**Unit tests for `CallbackResolver` (`CallbackResolverTest`):**
 - Named function → `'function_name'`
 - Array instance method `[$obj, 'method']` → `'ClassName::method'`
 - Array static method `['Class', 'method']` → `'Class::method'`
@@ -200,32 +237,49 @@ Added to activation defaults in `wp_flame_activate()`. Cleaned up by `uninstall.
 - Invocable object with `__invoke` → `'ClassName::__invoke'`
 - Invalid callable → falls back to callback ID string
 - Second call returns cached result
+- Source resolution delegates to Collector::get_source_from_file()
+
+**Unit tests for `CallbackWrapper` (`CallbackWrapperTest`):**
+- Invocation passes args through to original callback
+- Return value is passed through from original callback
+- Span is created when callback exceeds threshold
+- Span is discarded when callback is below threshold
+- `get_original()` returns the wrapped callback
 
 **Manual integration testing against wp-env:**
-- Activate plugin, browse frontend page, verify flame graph shows per-callback spans nested inside lifecycle phases
+- Browse frontend page, verify flame graph shows per-callback spans nested inside lifecycle phases
 - Verify DB queries are nested inside callback spans (not just lifecycle phases)
 - Verify sub-threshold callbacks don't appear in trace
 - Verify callbacks with child spans (DB queries) below threshold still appear
-- Verify `remove_filter()` still works during hook execution
+- Verify `remove_filter()` still works after wrapping
 - Verify no fatal errors on pages with many plugins
 
 ## Performance Budget
 
-- Per-callback overhead (below threshold, cached): 2x `microtime()` + name/source cache lookup + 1 float subtraction + 1 comparison = ~0.5 microseconds
-- Per-callback overhead (first call, any threshold): + reflection for name/source resolution = ~2-5 microseconds (amortized once per unique callback ID across the request)
-- Per-callback overhead (above threshold, cached): + span creation = ~1 microsecond additional
-- 500 callbacks on a typical page, ~300 unique callback IDs: ~0.15ms first-call reflection + ~0.25ms cached overhead = ~0.4ms total
+- Per-callback overhead at invocation time (cached): `start_span()` + `call_user_func_array()` + `end_span_filtered()` = ~1-2 microseconds
+- Wrapping pass overhead (one-time per pass): reflection for ~300 unique callbacks = ~0.5ms per pass, 2 passes = ~1ms total
+- 500 callback invocations during a request: ~0.5-1.0ms total invocation overhead
 - Well within the <5ms overhead budget
 
 ## Risks
 
 | Risk | Mitigation |
 |---|---|
-| WordPress updates `WP_Hook::apply_filters()` internals | Low frequency (unchanged since 4.7/2016). Monitor WP releases. Override is a direct copy with minimal additions. |
-| Plugin calls `remove_filter()` during hook execution | WordPress handles this via `$this->iterations` tracking. Our override preserves this logic. |
-| Reflection throws on invalid callable | try/catch with fallback to callback ID. Site continues working. |
-| Another plugin also extends WP_Hook | `instanceof` check in replacement loop. If instance is already a custom subclass, skip it (don't replace). |
+| Wrapped callback changes behaviour subtly | CallbackWrapper passes all args through and returns the result. `accepted_args` handling is done by WP_Hook before our wrapper is called. |
+| `remove_filter()` can't find wrapped callbacks | Array key is preserved — only the `function` value changes. `remove_filter` matches by key. |
+| `has_filter()` returns wrong result | Same key-based lookup. Works correctly. |
+| Reflection throws on invalid callable | try/catch in CallbackResolver with fallback to callback ID. |
+| Plugin registers callback after both wrapping passes | Unwrapped callback runs normally (no timing). Not a correctness issue. |
+| By-reference args in `do_all_hook` | `do_all_hook` callbacks are not performance-critical. If args are passed by reference and our wrapper uses `func_get_args()`, references may not be preserved. Accept this limitation. |
 
 ## Relationship to Phase 1
 
-This spec builds on the Phase 1 implementation. It adds one new class (`Hook`), modifies one existing class (`Collector`), and updates the bootstrap (`wp-flame.php`). All Phase 1 functionality continues to work unchanged. The `end_span_filtered()` method is additive — existing code uses `end_span()` which is unmodified.
+This spec builds on the Phase 1 implementation. It adds two new classes (`CallbackWrapper`, `CallbackResolver`), modifies one existing class (`Collector`), and updates the bootstrap (`wp-flame.php`). All Phase 1 functionality continues to work unchanged. The `end_span_filtered()` method is additive — existing code uses `end_span()` which is unmodified.
+
+## Advantages Over Original WP_Hook Extension Approach
+
+1. **Works with `final` WP_Hook** — no class extension needed
+2. **Zero WordPress internal code copied** — no maintenance burden when WordPress updates `WP_Hook`
+3. **Simpler** — wrapping is a straightforward array manipulation, not a class replacement
+4. **`remove_filter()` compatibility** — key-based lookup is unaffected
+5. **Name/source resolved at wrap time** — no reflection cost during callback invocation
