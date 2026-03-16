@@ -87,7 +87,7 @@
     line-height: 1.5;
     pointer-events: none;
     z-index: 100000;
-    max-width: 400px;
-    white-space: nowrap;
+    max-width: 350px;
+    word-break: break-word;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
