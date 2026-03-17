@@ -106,6 +106,20 @@ class Admin
         if (! empty($_GET['ip_address'])) {
             $filters['ip_address'] = sanitize_text_field(wp_unslash($_GET['ip_address']));
         }
+        if (! empty($_GET['grade'])) {
+            $grade = strtoupper(sanitize_text_field(wp_unslash($_GET['grade'])));
+            $grade_ranges = [
+                'A' => [90, 100],
+                'B' => [80, 89],
+                'C' => [70, 79],
+                'D' => [60, 69],
+                'F' => [0, 59],
+            ];
+            if (isset($grade_ranges[$grade])) {
+                $filters['min_score'] = $grade_ranges[$grade][0];
+                $filters['max_score'] = $grade_ranges[$grade][1];
+            }
+        }
         if (! empty($_GET['orderby'])) {
             $filters['orderby'] = sanitize_text_field(wp_unslash($_GET['orderby']));
         }
@@ -213,6 +227,47 @@ class Admin
         }
         echo '</select>';
         echo ' <input type="number" name="min_duration" value="' . esc_attr(isset($filters['min_duration']) ? (string) $filters['min_duration'] : '') . '" placeholder="' . esc_attr__('Min ms...', 'wp-flame') . '" step="any" style="width:100px">';
+
+        // Grade filter
+        $current_grade = isset($_GET['grade']) ? strtoupper(sanitize_text_field(wp_unslash($_GET['grade']))) : '';
+        echo ' <select name="grade" style="height:30px;vertical-align:top">';
+        echo '<option value="">' . esc_html__('All Grades', 'wp-flame') . '</option>';
+        foreach (['A', 'B', 'C', 'D', 'F'] as $g) {
+            echo '<option value="' . esc_attr($g) . '"' . selected($current_grade, $g, false) . '>' . esc_html($g) . '</option>';
+        }
+        echo '</select>';
+
+        // User filter
+        $current_user_filter = isset($_GET['user_id']) && $_GET['user_id'] !== '' ? (int) wp_unslash($_GET['user_id']) : '';
+        $distinct_users = $this->storage->get_distinct_users();
+        echo ' <select name="user_id" style="height:30px;vertical-align:top">';
+        echo '<option value="">' . esc_html__('All Users', 'wp-flame') . '</option>';
+        foreach ($distinct_users as $u) {
+            $uid = (int) $u['user_id'];
+            if ($uid === 0) {
+                $label = __('Anonymous', 'wp-flame');
+            } else {
+                $user_data = get_userdata($uid);
+                $label = $user_data ? $user_data->display_name : '#' . $uid;
+            }
+            $label .= ' (' . (int) $u['request_count'] . ')';
+            $sel = ($current_user_filter !== '' && $current_user_filter === $uid) ? ' selected' : '';
+            echo '<option value="' . esc_attr((string) $uid) . '"' . $sel . '>' . esc_html($label) . '</option>';
+        }
+        echo '</select>';
+
+        // IP filter
+        $current_ip_filter = isset($_GET['ip_address']) ? sanitize_text_field(wp_unslash($_GET['ip_address'])) : '';
+        $distinct_ips = $this->storage->get_distinct_ips();
+        echo ' <select name="ip_address" style="height:30px;vertical-align:top">';
+        echo '<option value="">' . esc_html__('All IPs', 'wp-flame') . '</option>';
+        foreach ($distinct_ips as $ip_row) {
+            $ip = (string) $ip_row['ip_address'];
+            $ip_label = $ip . ' (' . (int) $ip_row['request_count'] . ')';
+            echo '<option value="' . esc_attr($ip) . '"' . selected($current_ip_filter, $ip, false) . '>' . esc_html($ip_label) . '</option>';
+        }
+        echo '</select>';
+
         echo ' <input type="submit" class="button" value="' . esc_attr__('Filter', 'wp-flame') . '">';
         echo '</div></div>';
         echo '</form>';

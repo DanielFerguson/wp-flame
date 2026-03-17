@@ -140,6 +140,16 @@ class Storage
             $params[] = $filters['ip_address'];
         }
 
+        if (isset($filters['min_score'])) {
+            $where  .= ' AND score >= %d';
+            $params[] = (int) $filters['min_score'];
+        }
+
+        if (isset($filters['max_score'])) {
+            $where  .= ' AND score <= %d';
+            $params[] = (int) $filters['max_score'];
+        }
+
         $per_page = (int) ($filters['per_page'] ?? 20);
         $page     = max(1, (int) ($filters['page'] ?? 1));
         $offset   = ($page - 1) * $per_page;
@@ -206,6 +216,16 @@ class Storage
         if (! empty($filters['ip_address'])) {
             $where  .= ' AND ip_address = %s';
             $params[] = $filters['ip_address'];
+        }
+
+        if (isset($filters['min_score'])) {
+            $where  .= ' AND score >= %d';
+            $params[] = (int) $filters['min_score'];
+        }
+
+        if (isset($filters['max_score'])) {
+            $where  .= ' AND score <= %d';
+            $params[] = (int) $filters['max_score'];
         }
 
         $sql = "SELECT COUNT(*) FROM {$this->table} WHERE {$where}";
@@ -381,6 +401,46 @@ class Storage
              ORDER BY request_count DESC
              LIMIT %d",
             $days, $limit
+        ), ARRAY_A);
+        return is_array($results) ? $results : [];
+    }
+
+    /**
+     * Get distinct user IDs from recent traces for filter dropdowns.
+     *
+     * @return array<int, array{user_id: int, request_count: int}>
+     */
+    public function get_distinct_users(int $days = 7): array
+    {
+        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+        $results = $this->wpdb->get_results($this->wpdb->prepare(
+            "SELECT user_id, COUNT(*) as request_count
+             FROM `{$this->table}`
+             WHERE created_at >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL %d DAY)
+             GROUP BY user_id
+             ORDER BY request_count DESC
+             LIMIT 50",
+            $days
+        ), ARRAY_A);
+        return is_array($results) ? $results : [];
+    }
+
+    /**
+     * Get distinct IP addresses from recent traces for filter dropdowns.
+     *
+     * @return array<int, array{ip_address: string, request_count: int}>
+     */
+    public function get_distinct_ips(int $days = 7): array
+    {
+        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+        $results = $this->wpdb->get_results($this->wpdb->prepare(
+            "SELECT ip_address, COUNT(*) as request_count
+             FROM `{$this->table}`
+             WHERE created_at >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL %d DAY) AND ip_address != ''
+             GROUP BY ip_address
+             ORDER BY request_count DESC
+             LIMIT 50",
+            $days
         ), ARRAY_A);
         return is_array($results) ? $results : [];
     }
