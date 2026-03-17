@@ -276,5 +276,100 @@ namespace WPFlame\Tests\Unit {
             $trace = $collector->get_trace();
             $this->assertSame('GraphQL: anonymous', $trace->spans[0]->name);
         }
+
+        public function test_activate_wpgraphql_hooks_registers_resolver_hooks(): void
+        {
+            $collector = $this->make_collector();
+            $gql = new GraphQL($collector);
+            $gql->activate_wpgraphql_hooks();
+
+            $this->assertArrayHasKey('graphql_pre_resolve_field', $GLOBALS['wp_flame_test_filters']);
+            $this->assertArrayHasKey('graphql_resolve_field', $GLOBALS['wp_flame_test_filters']);
+        }
+
+        public function test_root_field_creates_resolver_span(): void
+        {
+            $collector = $this->make_collector();
+            $gql = new GraphQL($collector);
+            $gql->activate_wpgraphql_hooks();
+
+            $pre_resolve = $GLOBALS['wp_flame_test_filters']['graphql_pre_resolve_field'][0]['callback'];
+            $resolve = $GLOBALS['wp_flame_test_filters']['graphql_resolve_field'][0]['callback'];
+
+            $default = null;
+            $result_value = ['data' => []];
+
+            $pre_result = $pre_resolve($default, null, [], null, null, 'RootQuery', 'posts', null, null);
+            $this->assertNull($pre_result); // Must return $default unchanged
+
+            $resolve_result = $resolve($result_value, null, [], null, null, 'RootQuery', 'posts', null, null);
+            $this->assertSame($result_value, $resolve_result); // Must return $result unchanged
+
+            $trace = $collector->get_trace();
+            $this->assertCount(1, $trace->spans);
+
+            $span = $trace->spans[0];
+            $this->assertSame('RootQuery.posts', $span->name);
+            $this->assertSame(Span::TYPE_PLUGIN, $span->type);
+            $this->assertSame('wpgraphql', $span->source);
+            $this->assertSame('graphql:RootQuery.posts', $span->meta['hook']);
+            $this->assertSame('RootQuery', $span->meta['type_name']);
+            $this->assertSame('posts', $span->meta['field_key']);
+        }
+
+        public function test_non_root_field_does_not_create_span(): void
+        {
+            $collector = $this->make_collector();
+            $gql = new GraphQL($collector);
+            $gql->activate_wpgraphql_hooks();
+
+            $pre_resolve = $GLOBALS['wp_flame_test_filters']['graphql_pre_resolve_field'][0]['callback'];
+            $resolve = $GLOBALS['wp_flame_test_filters']['graphql_resolve_field'][0]['callback'];
+
+            $pre_resolve(null, null, [], null, null, 'Post', 'title', null, null);
+            $resolve('Hello World', null, [], null, null, 'Post', 'title', null, null);
+
+            $trace = $collector->get_trace();
+            $this->assertCount(0, $trace->spans);
+        }
+
+        public function test_aliased_root_fields_resolve_correctly_via_stack(): void
+        {
+            $collector = $this->make_collector();
+            $gql = new GraphQL($collector);
+            $gql->activate_wpgraphql_hooks();
+
+            $pre_resolve = $GLOBALS['wp_flame_test_filters']['graphql_pre_resolve_field'][0]['callback'];
+            $resolve = $GLOBALS['wp_flame_test_filters']['graphql_resolve_field'][0]['callback'];
+
+            $pre_resolve(null, null, [], null, null, 'RootQuery', 'posts', null, null);
+            $resolve(['first batch'], null, [], null, null, 'RootQuery', 'posts', null, null);
+
+            $pre_resolve(null, null, [], null, null, 'RootQuery', 'posts', null, null);
+            $resolve(['second batch'], null, [], null, null, 'RootQuery', 'posts', null, null);
+
+            $trace = $collector->get_trace();
+            $this->assertCount(2, $trace->spans);
+            $this->assertSame('RootQuery.posts', $trace->spans[0]->name);
+            $this->assertSame('RootQuery.posts', $trace->spans[1]->name);
+            $this->assertNotSame($trace->spans[0]->id, $trace->spans[1]->id);
+        }
+
+        public function test_root_mutation_creates_span(): void
+        {
+            $collector = $this->make_collector();
+            $gql = new GraphQL($collector);
+            $gql->activate_wpgraphql_hooks();
+
+            $pre_resolve = $GLOBALS['wp_flame_test_filters']['graphql_pre_resolve_field'][0]['callback'];
+            $resolve = $GLOBALS['wp_flame_test_filters']['graphql_resolve_field'][0]['callback'];
+
+            $pre_resolve(null, null, [], null, null, 'RootMutation', 'createPost', null, null);
+            $resolve(['id' => 1], null, [], null, null, 'RootMutation', 'createPost', null, null);
+
+            $trace = $collector->get_trace();
+            $this->assertCount(1, $trace->spans);
+            $this->assertSame('RootMutation.createPost', $trace->spans[0]->name);
+        }
     }
 }

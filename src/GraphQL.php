@@ -10,6 +10,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class GraphQL
 {
+    private const ROOT_TYPES = ['rootquery', 'rootmutation', 'rootsubscription'];
+
     private Collector $collector;
     private bool $full_query_text;
 
@@ -119,7 +121,47 @@ class GraphQL
 
     private function register_resolver_hooks(): void
     {
-        // Implemented in Task 4
+        add_filter('graphql_pre_resolve_field', function ($default, $source, $args, $context, $info, $type_name, $field_key, $field, $field_resolver) {
+            try {
+                if (! in_array(strtolower($type_name), self::ROOT_TYPES, true)) {
+                    return $default;
+                }
+
+                $span_id = $this->collector->start_span(
+                    "{$type_name}.{$field_key}",
+                    Span::TYPE_PLUGIN,
+                    'wpgraphql',
+                    [
+                        'type_name' => $type_name,
+                        'field_key' => $field_key,
+                        'hook'      => "graphql:{$type_name}.{$field_key}",
+                    ]
+                );
+
+                $key = strtolower($type_name) . '.' . $field_key;
+                $this->resolver_span_stacks[$key][] = $span_id;
+            } catch (\Throwable $e) {
+                // Don't break field resolution
+            }
+            return $default;
+        }, 10, 9);
+
+        add_filter('graphql_resolve_field', function ($result, $source, $args, $context, $info, $type_name, $field_key, $field, $field_resolver) {
+            try {
+                if (! in_array(strtolower($type_name), self::ROOT_TYPES, true)) {
+                    return $result;
+                }
+
+                $key = strtolower($type_name) . '.' . $field_key;
+                if (! empty($this->resolver_span_stacks[$key])) {
+                    $span_id = array_pop($this->resolver_span_stacks[$key]);
+                    $this->collector->end_span($span_id);
+                }
+            } catch (\Throwable $e) {
+                // Don't break field resolution
+            }
+            return $result;
+        }, 10, 9);
     }
 
     /**
