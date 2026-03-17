@@ -59,6 +59,76 @@ Task 9  (2.4 — dashboard analytics to SQL)   ← depends on Task 8
 
 ---
 
+## Critical Implementer Warnings
+
+These issues were identified during adversarial review. Every implementer MUST read these before starting their task.
+
+### W1: DB/GraphQL Mutual Exclusion (Task 4)
+The instrumentor loop runs ALL instrumentors through `is_applicable()`/`register()` independently. But `DbInstrumentor` and `GraphQL` are mutually exclusive — if both activate, you get double DB instrumentation (wpdb replacement AND `log_query_custom_data` hook). The loop MUST have an explicit guard:
+
+```php
+$graphql_applicable = false;
+foreach ( $instrumentors as $inst ) {
+    if ( ! ( $inst instanceof Instrumentor ) ) {
+        continue; // Type safety for third-party filter additions
+    }
+    if ( $inst instanceof WPFlame\GraphQL && $inst->is_applicable() ) {
+        $graphql_applicable = true;
+        $inst->register( $collector );
+    } elseif ( $inst instanceof WPFlame\DbInstrumentor && $graphql_applicable ) {
+        // Skip DB — GraphQL handles queries via log_query_custom_data
+        continue;
+    } elseif ( $inst->is_applicable() ) {
+        $inst->register( $collector );
+    }
+}
+```
+
+The `$GLOBALS['wp_flame_skip_callback_wrapping']` flag must also be set when GraphQL is applicable, or callbacks will be double-instrumented alongside GraphQL resolver spans.
+
+### W2: Http/GraphQL Constructor Changes Break ALL Tests (Task 4)
+Changing Http and GraphQL constructors to no-arg breaks `HttpTest.php` (7 tests) and `GraphQLTest.php` (15+ tests). ALL tests that call `new Http($collector)` or `new GraphQL($collector, ...)` must be updated to `$obj = new Http(); $obj->register($collector);`. This is a COMPLETE test suite failure if missed.
+
+### W3: REST_REQUEST Is NOT Defined at init (Task 6)
+`REST_REQUEST` is defined at `rest_api_init`, NOT `init`. REST detection must use URL pattern matching (`/wp-json/` in REQUEST_URI) at `plugins_loaded`, similar to GraphQL detection. Do NOT rely on the `REST_REQUEST` constant for early detection.
+
+### W4: strtok() Is Stateful (Task 2)
+Do NOT use `strtok()` for URL path extraction. Use `explode('?', $url, 2)[0]` instead. `strtok()` sets an internal PHP pointer that affects subsequent `strtok()` calls elsewhere in the request.
+
+### W5: 50-Blob Decode Cannot Be Fully Eliminated (Task 9)
+Task 9 adds `db_time_ms` and `http_time_ms` columns but NOT `plugin_time_ms`/`theme_time_ms`/`core_time_ms`. The Time Breakdown Bar shows 5 types. The slowest callbacks ranking also requires span-level data. `get_recent_trace_data()` MUST be kept — only the db/http portions of the breakdown can use SQL. Attempting to remove the decode loop entirely will break the dashboard.
+
+### W6: Rule Classes Need Helper Methods (Task 7)
+`Insights.php` has private helper methods used by rules:
+- `extract_query_type()` — used by `duplicate_db_queries()`
+- `find_early_phase_ancestor()` logic — used by `http_during_early_phases()`
+
+These must be copied into the respective rule classes as private methods, or extracted to a shared `InsightHelpers` utility class.
+
+### W7: Admin.php Methods That Must STAY (Task 8)
+When splitting Admin.php, these methods must remain in the router class:
+- `register()`, `add_menu()`, `render_page()`, `handle_delete()` — routing
+- `enqueue_assets()` — asset loading (the `wp_add_inline_script()` call moves to `FlameGraphView` but the `wp_enqueue_*` calls stay here)
+- `render_notices()` — uses `global $wpdb; $wpdb instanceof DB` check
+
+Do NOT move these to view classes.
+
+### W8: mu-plugin Transition Gap (Task 6)
+On first request after plugin update (before mu-plugin auto-updates), the OLD mu-plugin registers late phases (`init`, `wp`, `template_redirect`) AND the new `wp_flame_init()` registers request-type-specific phases. Double phase registration produces garbled spans. Guard late phase registration with a mu-plugin version check:
+
+```php
+if ( defined( 'WP_FLAME_MU_VERSION' ) && WP_FLAME_MU_VERSION === WP_FLAME_VERSION ) {
+    // New mu-plugin — register request-type-specific late phases
+} else {
+    // Old mu-plugin or no mu-plugin — use degraded mode (existing behavior)
+}
+```
+
+### W9: GraphQL query_hash Gap (Task 3)
+Task 3 adds `query_hash` to DB.php spans but NOT to GraphQL.php's `register_db_hooks()` closure. Traces captured via the GraphQL path will never have `query_hash` in span meta. The `DuplicateDbQueries` rule must fall back to raw query text for these spans. Also consider adding `normalize_query` + `query_hash` to `GraphQL::register_db_hooks()` to close this gap.
+
+---
+
 ## Task 1: Extract Shared WHERE Clause Builder (Spec 2.9)
 
 **Files:**
@@ -86,7 +156,10 @@ private function build_where_clause( array $filters ): array
     // url LIKE, min/max duration, after/before dates, method, user_id, ip_address, min/max score
     // Each condition pushes to $where[] and $params[]
 
-    $where_sql = 'WHERE 1=1' . ( $where ? ' AND ' . implode( ' AND ', $where ) : '' );
+    // Return the clause WITHOUT the leading WHERE keyword.
+    // Callers prepend "WHERE " themselves.
+    // Always starts with "1=1" so callers can unconditionally append.
+    $where_sql = '1=1' . ( $where ? ' AND ' . implode( ' AND ', $where ) : '' );
     return [ $where_sql, $params ];
 }
 ```
@@ -103,7 +176,7 @@ public function list_traces( array $filters ): array
 public function count_traces( array $filters ): int
 {
     list( $where_sql, $params ) = $this->build_where_clause( $filters );
-    $sql = "SELECT COUNT(*) FROM {$this->table} {$where_sql}";
+    $sql = "SELECT COUNT(*) FROM {$this->table} WHERE {$where_sql}";
     // ...
 }
 ```
@@ -154,7 +227,7 @@ Change `const SCHEMA_VERSION = 1;` to `const SCHEMA_VERSION = 2;` so `maybe_upgr
 In `save_trace()`, before building `$data`, strip the query string:
 
 ```php
-$url_path = strtok( $trace->url, '?' ) ?: $trace->url;
+$url_path = explode( '?', $trace->url, 2 )[0];
 ```
 
 Add to the `$data` array: `'url_path' => $url_path,`
@@ -364,12 +437,21 @@ The GraphQL two-phase detection currently lives in `wp_flame_init()`. Move it in
 class GraphQL implements Instrumentor
 {
     // ... existing properties
+    /** @var \wpdb */
+    private $wpdb;
+
+    public function __construct( bool $full_query_text = false, \wpdb $wpdb = null )
+    {
+        $this->full_query_text = $full_query_text;
+        $this->wpdb            = $wpdb;
+    }
 
     public function is_applicable(): bool
     {
         // Phase 1: URL-based detection (called at plugins_loaded)
+        $uri = isset( $_SERVER['REQUEST_URI'] ) ? $_SERVER['REQUEST_URI'] : '';
         return self::is_graphql_endpoint(
-            $_SERVER['REQUEST_URI'] ?? '',
+            $uri,
             apply_filters( 'graphql_endpoint', 'graphql' )
         );
     }
@@ -386,14 +468,17 @@ class GraphQL implements Instrumentor
             } else {
                 // False positive — deactivate GraphQL, activate DB instrumentation
                 $this->deactivate();
-                // DB instrumentor should handle the fallback
+                if ( $this->wpdb && DB::can_replace( $this->wpdb ) ) {
+                    $GLOBALS['wpdb'] = DB::from_wpdb( $this->wpdb, $collector, $this->full_query_text );
+                }
+                $GLOBALS['wp_flame_skip_callback_wrapping'] = false;
             }
         }, 0 );
     }
 }
 ```
 
-**Key concern:** The false-positive fallback (reactivating DB instrumentation) currently creates a DB instance in `wp_flame_init()` at Phase 2. With the instrumentor pattern, the `DbInstrumentor` has already been checked via `is_applicable()` and skipped (because GraphQL was applicable). The GraphQL instrumentor's Phase 2 rollback must be able to create a DB instrumentor on the fly. Pass `$wpdb` and `$full_query_text` to GraphQL's constructor so it can do this fallback.
+The GraphQL constructor now accepts `$wpdb` to enable DB instrumentation fallback on false-positive detection. The `$_SERVER['REQUEST_URI']` access uses `isset()` to avoid PHP notices in CLI/test environments.
 
 - [ ] **Step 5: Create CallbackInstrumentor**
 
@@ -428,21 +513,44 @@ class CallbackInstrumentor implements Instrumentor
 Replace the ad-hoc instantiation with:
 
 ```php
+$full_query_text = (bool) $config->get( 'wp_flame_full_query_text', false );
 $instrumentors = [
-    new WPFlame\DbInstrumentor( $wpdb, $config ),
-    new WPFlame\Http( $collector ),
-    new WPFlame\GraphQL( $collector, (bool) $config->get( 'wp_flame_full_query_text', false ) ),
+    new WPFlame\DbInstrumentor( $wpdb, $full_query_text ),
+    new WPFlame\Http(),
+    new WPFlame\GraphQL( $full_query_text, $wpdb ),
     new WPFlame\CallbackInstrumentor( $config ),
 ];
 $instrumentors = apply_filters( 'wp_flame_instrumentors', $instrumentors );
+
+// DB and GraphQL are mutually exclusive — see W1 warning.
+$graphql_active = false;
 foreach ( $instrumentors as $inst ) {
-    if ( $inst->is_applicable() ) {
-        $inst->register( $collector );
+    if ( ! ( $inst instanceof WPFlame\Instrumentor ) ) {
+        continue;
     }
+    if ( $inst instanceof WPFlame\GraphQL ) {
+        if ( $inst->is_applicable() ) {
+            $graphql_active = true;
+            $inst->register( $collector );
+        }
+    } elseif ( $inst instanceof WPFlame\DbInstrumentor ) {
+        if ( ! $graphql_active && $inst->is_applicable() ) {
+            $inst->register( $collector );
+        }
+    } else {
+        if ( $inst->is_applicable() ) {
+            $inst->register( $collector );
+        }
+    }
+}
+
+// If GraphQL is active, skip callback wrapping to avoid double instrumentation.
+if ( $graphql_active ) {
+    $GLOBALS['wp_flame_skip_callback_wrapping'] = true;
 }
 ```
 
-**Important:** The GraphQL two-phase detection is complex. The GraphQL instrumentor's `register()` must handle both phases internally (register early DB hooks, then confirm at init). Review the existing GraphQL detection in `wp_flame_init()` lines 174-194 and 315-340 before implementing.
+**Important:** The GraphQL instrumentor's `register()` must handle both phases internally. It registers DB hooks immediately, then at `init` priority 0 either activates WPGraphQL hooks (confirmed GraphQL) or deactivates and creates a `DbInstrumentor` on the fly (false positive). The GraphQL constructor now receives `$wpdb` and `$full_query_text` to enable the fallback. Review the existing GraphQL detection in `wp_flame_init()` lines 174-194 and 315-340 before implementing.
 
 - [ ] **Step 7: Remove wp_flame_wrap_callbacks() function**
 
@@ -501,6 +609,12 @@ git commit -m "feat: add third callback wrapping pass at template_redirect/admin
 - [ ] **Step 1: Add request type detection to wp-flame.php**
 
 ```php
+/**
+ * Detect the current request type for phase map selection.
+ *
+ * IMPORTANT: REST_REQUEST constant is NOT defined at plugins_loaded or init.
+ * REST detection uses URL pattern matching instead (same approach as GraphQL detection).
+ */
 function wp_flame_detect_request_type(): string
 {
     if ( defined( 'WP_CLI' ) && WP_CLI ) {
@@ -512,7 +626,10 @@ function wp_flame_detect_request_type(): string
     if ( defined( 'DOING_AJAX' ) && DOING_AJAX ) {
         return 'ajax';
     }
-    if ( defined( 'REST_REQUEST' ) && REST_REQUEST ) {
+    // REST detection via URL pattern — REST_REQUEST is not defined until rest_api_init.
+    $rest_prefix = rest_get_url_prefix(); // Returns 'wp-json' by default
+    $request_uri = isset( $_SERVER['REQUEST_URI'] ) ? $_SERVER['REQUEST_URI'] : '';
+    if ( false !== strpos( $request_uri, '/' . $rest_prefix . '/' ) ) {
         return 'rest';
     }
     if ( is_admin() ) {
@@ -521,6 +638,8 @@ function wp_flame_detect_request_type(): string
     return 'frontend';
 }
 ```
+
+**Note:** `rest_get_url_prefix()` is available at `plugins_loaded` (defined in `wp-includes/rest-api.php` which is loaded during WordPress bootstrap). This is the same early-detection approach used for GraphQL endpoints.
 
 - [ ] **Step 2: Modify mu-plugin to only register early phases**
 
@@ -536,13 +655,9 @@ Remove the `init`, `wp`, and `template_redirect` hooks from the mu-plugin — th
 
 - [ ] **Step 3: Register request-type-specific late phases**
 
-**Timing caveat:** `REST_REQUEST` is NOT defined at `plugins_loaded` (where `wp_flame_init()` runs). `DOING_AJAX` IS defined early via `wp-admin/admin-ajax.php`. The detection must be split:
+**Timing note:** All detection now happens at `plugins_loaded` (in `wp_flame_init()`). CLI, cron, AJAX use constants. REST uses URL pattern matching (see W3 warning). All late phases are registered immediately based on detection result.
 
-1. At `plugins_loaded` (in `wp_flame_init()`): detect CLI, cron, AJAX — these constants ARE available.
-2. At `init` priority 0: detect REST (check `REST_REQUEST`) and register REST-specific phases.
-3. Default to frontend if nothing else matches by `init`.
-
-Register late phases using the same closure pattern as the mu-plugin. After instrumentors are registered:
+Register late phases using the same closure pattern as the mu-plugin. After instrumentors are registered (and after the W8 mu-plugin version guard):
 
 ```php
 $request_type = wp_flame_detect_request_type();
@@ -1032,23 +1147,32 @@ foreach ( $trace->spans as $span ) {
 - [ ] **Step 3: Add Storage::get_time_breakdown() method**
 
 ```php
-public function get_time_breakdown( int $days = 7 ): array
+/**
+ * Get average time breakdown by span type (DB, HTTP, PHP/other).
+ *
+ * @param int $days
+ * @return array{avg_db_ms: float, avg_http_ms: float, avg_php_ms: float}|null
+ */
+public function get_time_breakdown( int $days = 7 ): ?array
 {
-    return $this->wpdb->get_results(
+    $row = $this->wpdb->get_row(
         $this->wpdb->prepare(
             "SELECT
                 COALESCE(AVG(db_time_ms), 0) AS avg_db_ms,
                 COALESCE(AVG(http_time_ms), 0) AS avg_http_ms,
-                COALESCE(AVG(total_ms - db_time_ms - http_time_ms), 0) AS avg_php_ms
+                COALESCE(AVG(total_ms - COALESCE(db_time_ms, 0) - COALESCE(http_time_ms, 0)), 0) AS avg_php_ms
             FROM {$this->table}
-            WHERE created_at >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL %d DAY)
-            AND db_time_ms > 0",
+            WHERE created_at >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL %d DAY)",
             $days
         ),
         ARRAY_A
     );
+
+    return $row ?: null;
 }
 ```
+
+**Note:** No `AND db_time_ms > 0` filter — that would exclude cached pages with zero DB queries and skew averages. All traces are included. `COALESCE` handles NULL values from old rows that predate the new columns.
 
 - [ ] **Step 4: Update dashboard to use SQL aggregates**
 
