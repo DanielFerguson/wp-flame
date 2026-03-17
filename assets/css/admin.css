@@ -187,6 +187,8 @@
     border: 1px solid #c3c4c7;
     border-radius: 4px;
     padding: 16px;
+    display: flex;
+    flex-direction: column;
 }
 
 .wp-flame-ranking h3 {
@@ -238,8 +240,8 @@
 
 .wp-flame-breakdown-bar {
     display: flex;
-    height: 24px;
-    border-radius: 6px;
+    height: 8px;
+    border-radius: 4px;
     overflow: hidden;
     background: #f0f0f0;
 }
@@ -263,11 +265,18 @@
 }
 
 /* Histogram */
+.wp-flame-histogram {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    justify-content: space-between;
+}
+
 .wp-flame-histogram-row {
     display: flex;
     align-items: center;
     gap: 8px;
-    margin: 4px 0;
+    flex: 1;
 }
 
 .wp-flame-histogram-label {
@@ -280,7 +289,8 @@
 
 .wp-flame-histogram-bar-container {
     flex: 1;
-    height: 16px;
+    height: 100%;
+    max-height: 28px;
     background: #f0f0f0;
     border-radius: 3px;
     overflow: hidden;
