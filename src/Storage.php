@@ -32,18 +32,22 @@ class Storage
             query_count int unsigned NOT NULL DEFAULT 0,
             peak_memory bigint unsigned NOT NULL DEFAULT 0,
             created_at datetime NOT NULL DEFAULT '0000-00-00 00:00:00',
+            user_id int NOT NULL DEFAULT 0,
+            ip_address varchar(45) NOT NULL DEFAULT '',
             score tinyint unsigned DEFAULT NULL,
             trace_data longtext NOT NULL,
             PRIMARY KEY  (id),
             UNIQUE KEY trace_id (trace_id),
-            KEY created_at (created_at)
+            KEY created_at (created_at),
+            KEY user_id (user_id),
+            KEY ip_address (ip_address)
         ) {$charset};";
 
         require_once ABSPATH . 'wp-admin/includes/upgrade.php';
         dbDelta($sql);
     }
 
-    public function save_trace(Trace $trace, ?int $score = null): void
+    public function save_trace(Trace $trace, ?int $score = null, int $user_id = 0, string $ip_address = ''): void
     {
         $data    = [
             'trace_id'    => $trace->id,
@@ -53,9 +57,11 @@ class Storage
             'query_count' => $trace->query_count,
             'peak_memory' => $trace->peak_memory,
             'created_at'  => current_time('mysql', true),
+            'user_id'     => $user_id,
+            'ip_address'  => $ip_address,
             'trace_data'  => wp_json_encode($trace->toArray()),
         ];
-        $formats = ['%s', '%s', '%s', '%f', '%d', '%d', '%s', '%s'];
+        $formats = ['%s', '%s', '%s', '%f', '%d', '%d', '%s', '%d', '%s', '%s'];
 
         if ($score !== null) {
             $data['score']  = $score;
@@ -124,6 +130,16 @@ class Storage
             $params[] = $filters['method'];
         }
 
+        if (isset($filters['user_id'])) {
+            $where  .= ' AND user_id = %d';
+            $params[] = (int) $filters['user_id'];
+        }
+
+        if (! empty($filters['ip_address'])) {
+            $where  .= ' AND ip_address = %s';
+            $params[] = $filters['ip_address'];
+        }
+
         $per_page = (int) ($filters['per_page'] ?? 20);
         $page     = max(1, (int) ($filters['page'] ?? 1));
         $offset   = ($page - 1) * $per_page;
@@ -132,7 +148,7 @@ class Storage
         $orderby = in_array($filters['orderby'] ?? '', $allowed_orderby, true) ? $filters['orderby'] : 'created_at';
         $order   = strtoupper($filters['order'] ?? '') === 'ASC' ? 'ASC' : 'DESC';
 
-        $sql = "SELECT trace_id, url, method, total_ms, query_count, peak_memory, created_at, score
+        $sql = "SELECT trace_id, url, method, total_ms, query_count, peak_memory, created_at, score, user_id, ip_address
                 FROM {$this->table}
                 WHERE {$where}
                 ORDER BY {$orderby} {$order}
@@ -180,6 +196,16 @@ class Storage
         if (! empty($filters['method'])) {
             $where  .= ' AND method = %s';
             $params[] = $filters['method'];
+        }
+
+        if (isset($filters['user_id'])) {
+            $where  .= ' AND user_id = %d';
+            $params[] = (int) $filters['user_id'];
+        }
+
+        if (! empty($filters['ip_address'])) {
+            $where  .= ' AND ip_address = %s';
+            $params[] = $filters['ip_address'];
         }
 
         $sql = "SELECT COUNT(*) FROM {$this->table} WHERE {$where}";
@@ -321,5 +347,41 @@ class Storage
             'count' => (int) ($row->count ?? 0),
             'bytes' => (int) ($row->bytes ?? 0),
         ];
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    public function get_top_users(int $limit = 5, int $days = 7): array
+    {
+        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name is safe: prefix + static suffix
+        $results = $this->wpdb->get_results($this->wpdb->prepare(
+            "SELECT user_id, COUNT(*) as request_count, AVG(total_ms) as avg_ms, SUM(total_ms) as total_ms
+             FROM `{$this->table}`
+             WHERE created_at >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL %d DAY)
+             GROUP BY user_id
+             ORDER BY total_ms DESC
+             LIMIT %d",
+            $days, $limit
+        ), ARRAY_A);
+        return is_array($results) ? $results : [];
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    public function get_top_ips(int $limit = 5, int $days = 7): array
+    {
+        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name is safe: prefix + static suffix
+        $results = $this->wpdb->get_results($this->wpdb->prepare(
+            "SELECT ip_address, COUNT(*) as request_count, AVG(total_ms) as avg_ms, SUM(total_ms) as total_ms
+             FROM `{$this->table}`
+             WHERE created_at >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL %d DAY) AND ip_address != ''
+             GROUP BY ip_address
+             ORDER BY request_count DESC
+             LIMIT %d",
+            $days, $limit
+        ), ARRAY_A);
+        return is_array($results) ? $results : [];
     }
 }
