@@ -29,3 +29,9 @@ $mu_file = WPMU_PLUGIN_DIR . '/wp-flame-early-hooks.php';
 if ( file_exists( $mu_file ) ) {
     @unlink( $mu_file );
 }
+
+// Clear scheduled cron events.
+wp_clear_scheduled_hook( 'wp_flame_prune_traces' );
+
+// Delete transients (not matched by the wp_flame_% option cleanup above).
+$wpdb->query( "DELETE FROM {$wpdb->options} WHERE option_name LIKE '\_transient\_wp\_flame\_%' OR option_name LIKE '\_transient\_timeout\_wp\_flame\_%'" );
