@@ -59,8 +59,10 @@ class Insights
 
             $insights[] = [
                 'severity' => 'warning',
-                'title'    => "External HTTP call to {$host} took {$duration}ms",
-                'detail'   => "URL: {$url}, Method: {$method}, Status: {$status}. Consider caching the response or deferring to a background task.",
+                /* translators: 1: hostname, 2: duration in milliseconds */
+                'title'    => sprintf(__('External HTTP call to %1$s took %2$dms', 'wp-flame'), $host, $duration),
+                /* translators: 1: full URL, 2: HTTP method, 3: HTTP status code */
+                'detail'   => sprintf(__('URL: %1$s, Method: %2$s, Status: %3$s. Consider caching the response or deferring to a background task.', 'wp-flame'), $url, $method, $status),
             ];
         }
 
@@ -108,8 +110,10 @@ class Insights
 
             $insights[] = [
                 'severity' => $severity,
-                'title'    => "{$count} duplicate {$query_type} queries detected",
-                'detail'   => "The query '{$truncated}' ran {$count} times totalling {$total_ms}ms. Consider caching with wp_cache or a transient.",
+                /* translators: 1: number of duplicate queries, 2: SQL query type (e.g. SELECT) */
+                'title'    => sprintf(__('%1$d duplicate %2$s queries detected', 'wp-flame'), $count, $query_type),
+                /* translators: 1: truncated SQL query, 2: number of times run, 3: total duration in milliseconds */
+                'detail'   => sprintf(__("The query '%1\$s' ran %2\$d times totalling %3\$dms. Consider caching with wp_cache or a transient.", 'wp-flame'), $truncated, $count, $total_ms),
             ];
         }
 
@@ -138,8 +142,9 @@ class Insights
         return [
             [
                 'severity' => $severity,
-                'title'    => "{$count} database queries on this page",
-                'detail'   => 'Consider enabling object caching or reducing queries.',
+                /* translators: %d: number of database queries */
+                'title'    => sprintf(__('%d database queries on this page', 'wp-flame'), $count),
+                'detail'   => __('Consider enabling object caching or reducing queries.', 'wp-flame'),
             ],
         ];
     }
@@ -165,8 +170,10 @@ class Insights
 
             $insights[] = [
                 'severity' => 'warning',
-                'title'    => "{$span->name} took {$duration}ms on the '{$hook}' hook",
-                'detail'   => "Source: {$source}. This callback is a performance bottleneck.",
+                /* translators: 1: callback/span name, 2: duration in milliseconds, 3: hook name */
+                'title'    => sprintf(__("%1\$s took %2\$dms on the '%3\$s' hook", 'wp-flame'), $span->name, $duration, $hook),
+                /* translators: %s: source plugin or theme name */
+                'detail'   => sprintf(__('Source: %s. This callback is a performance bottleneck.', 'wp-flame'), $source),
             ];
         }
 
@@ -220,8 +227,10 @@ class Insights
 
             $insights[] = [
                 'severity' => 'warning',
-                'title'    => "HTTP request during {$phase} blocks page load",
-                'detail'   => "{$host} called during {$phase} — consider deferring to a later hook or using a transient.",
+                /* translators: %s: WordPress lifecycle phase name (e.g. Init, Plugin Load) */
+                'title'    => sprintf(__('HTTP request during %s blocks page load', 'wp-flame'), $phase),
+                /* translators: 1: hostname, 2: WordPress lifecycle phase name */
+                'detail'   => sprintf(__('%1$s called during %2$s — consider deferring to a later hook or using a transient.', 'wp-flame'), $host, $phase),
             ];
         }
 

@@ -27,8 +27,8 @@ class Settings
     public function add_settings_page(): void
     {
         add_options_page(
-            'WP Flame Settings',
-            'WP Flame',
+            __('WP Flame Settings', 'wp-flame'),
+            __('WP Flame', 'wp-flame'),
             'manage_options',
             'wp-flame-settings',
             [$this, 'render_page']
@@ -85,7 +85,7 @@ class Settings
         // Section
         add_settings_section(
             'wp_flame_general',
-            'General Settings',
+            __('General Settings', 'wp-flame'),
             '__return_false',
             'wp-flame-settings'
         );
@@ -93,7 +93,7 @@ class Settings
         // Fields
         add_settings_field(
             'wp_flame_enabled',
-            'Enable Tracing',
+            __('Enable Tracing', 'wp-flame'),
             [$this, 'render_field_enabled'],
             'wp-flame-settings',
             'wp_flame_general'
@@ -101,7 +101,7 @@ class Settings
 
         add_settings_field(
             'wp_flame_trace_audience',
-            'Trace Audience',
+            __('Trace Audience', 'wp-flame'),
             [$this, 'render_field_trace_audience'],
             'wp-flame-settings',
             'wp_flame_general'
@@ -109,7 +109,7 @@ class Settings
 
         add_settings_field(
             'wp_flame_sample_rate',
-            'Sample Rate',
+            __('Sample Rate', 'wp-flame'),
             [$this, 'render_field_sample_rate'],
             'wp-flame-settings',
             'wp_flame_general'
@@ -117,7 +117,7 @@ class Settings
 
         add_settings_field(
             'wp_flame_retention_days',
-            'Retention Period',
+            __('Retention Period', 'wp-flame'),
             [$this, 'render_field_retention_days'],
             'wp-flame-settings',
             'wp_flame_general'
@@ -125,7 +125,7 @@ class Settings
 
         add_settings_field(
             'wp_flame_min_callback_ms',
-            'Minimum Callback Duration',
+            __('Minimum Callback Duration', 'wp-flame'),
             [$this, 'render_field_min_callback_ms'],
             'wp-flame-settings',
             'wp_flame_general'
@@ -133,7 +133,7 @@ class Settings
 
         add_settings_field(
             'wp_flame_full_query_text',
-            'Full SQL Query Text',
+            __('Full SQL Query Text', 'wp-flame'),
             [$this, 'render_field_full_query_text'],
             'wp-flame-settings',
             'wp_flame_general'
@@ -145,7 +145,7 @@ class Settings
         $value = get_option('wp_flame_enabled', true);
         echo '<label>';
         echo '<input type="checkbox" name="wp_flame_enabled" value="1" ' . checked($value, true, false) . '>';
-        echo ' Enable tracing';
+        echo ' ' . esc_html__('Enable tracing', 'wp-flame');
         echo '</label>';
     }
 
@@ -153,9 +153,9 @@ class Settings
     {
         $value = get_option('wp_flame_trace_audience', 'admins');
         echo '<select name="wp_flame_trace_audience">';
-        echo '<option value="admins" ' . selected($value, 'admins', false) . '>Admins only</option>';
-        echo '<option value="logged_in" ' . selected($value, 'logged_in', false) . '>Logged-in users</option>';
-        echo '<option value="everyone" ' . selected($value, 'everyone', false) . '>Everyone</option>';
+        echo '<option value="admins" ' . selected($value, 'admins', false) . '>' . esc_html__('Admins only', 'wp-flame') . '</option>';
+        echo '<option value="logged_in" ' . selected($value, 'logged_in', false) . '>' . esc_html__('Logged-in users', 'wp-flame') . '</option>';
+        echo '<option value="everyone" ' . selected($value, 'everyone', false) . '>' . esc_html__('Everyone', 'wp-flame') . '</option>';
         echo '</select>';
     }
 
@@ -163,21 +163,21 @@ class Settings
     {
         $value = (int) get_option('wp_flame_sample_rate', 1);
         echo '<input type="number" name="wp_flame_sample_rate" value="' . esc_attr((string) $value) . '" min="1" class="small-text">';
-        echo '<p class="description">Trace 1 in every N requests. Set to 1 to trace every request.</p>';
+        echo '<p class="description">' . esc_html__('Trace 1 in every N requests. Set to 1 to trace every request.', 'wp-flame') . '</p>';
     }
 
     public function render_field_retention_days(): void
     {
         $value = (int) get_option('wp_flame_retention_days', 7);
         echo '<input type="number" name="wp_flame_retention_days" value="' . esc_attr((string) $value) . '" min="1" class="small-text">';
-        echo '<p class="description">Number of days to keep traces before automatic deletion.</p>';
+        echo '<p class="description">' . esc_html__('Number of days to keep traces before automatic deletion.', 'wp-flame') . '</p>';
     }
 
     public function render_field_min_callback_ms(): void
     {
         $value = (float) get_option('wp_flame_min_callback_ms', 0.5);
         echo '<input type="number" name="wp_flame_min_callback_ms" value="' . esc_attr((string) $value) . '" min="0" step="0.1" class="small-text">';
-        echo '<p class="description">Minimum callback duration to record (in milliseconds).</p>';
+        echo '<p class="description">' . esc_html__('Minimum callback duration to record (in milliseconds).', 'wp-flame') . '</p>';
     }
 
     public function render_field_full_query_text(): void
@@ -185,19 +185,19 @@ class Settings
         $value = get_option('wp_flame_full_query_text', false);
         echo '<label>';
         echo '<input type="checkbox" name="wp_flame_full_query_text" value="1" ' . checked($value, true, false) . '>';
-        echo ' Record full SQL query text';
+        echo ' ' . esc_html__('Record full SQL query text', 'wp-flame');
         echo '</label>';
-        echo '<p class="description">When enabled, the complete SQL query is stored with each trace. This may increase storage usage.</p>';
+        echo '<p class="description">' . esc_html__('When enabled, the complete SQL query is stored with each trace. This may increase storage usage.', 'wp-flame') . '</p>';
     }
 
     public function handle_purge(): void
     {
         if (! isset($_POST['_wpnonce']) || ! wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['_wpnonce'])), 'wp_flame_purge')) {
-            wp_die('Security check failed.');
+            wp_die(esc_html__('Security check failed.', 'wp-flame'));
         }
 
         if (! current_user_can('manage_options')) {
-            wp_die('You do not have permission to perform this action.');
+            wp_die(esc_html__('You do not have permission to perform this action.', 'wp-flame'));
         }
 
         $this->storage->purge_all();
@@ -210,35 +210,35 @@ class Settings
     public function render_page(): void
     {
         if (! current_user_can('manage_options')) {
-            wp_die('You do not have permission to access this page.');
+            wp_die(esc_html__('You do not have permission to access this page.', 'wp-flame'));
         }
 
         $stats = $this->storage->get_stats();
         $size_mb = round($stats['bytes'] / 1048576, 2);
 
         echo '<div class="wrap">';
-        echo '<h1>WP Flame Settings</h1>';
+        echo '<h1>' . esc_html__('WP Flame Settings', 'wp-flame') . '</h1>';
 
         settings_errors('wp_flame_settings');
 
         $purged_key = 'wp_flame_purged_' . get_current_user_id();
         if (get_transient($purged_key)) {
             delete_transient($purged_key);
-            echo '<div class="notice notice-success is-dismissible"><p>All traces have been purged.</p></div>';
+            echo '<div class="notice notice-success is-dismissible"><p>' . esc_html__('All traces have been purged.', 'wp-flame') . '</p></div>';
         }
 
         // Storage info box
         echo '<div class="card" style="max-width:600px;padding:12px 16px;margin-bottom:20px;">';
-        echo '<h2 style="margin-top:0;">Storage</h2>';
+        echo '<h2 style="margin-top:0;">' . esc_html__('Storage', 'wp-flame') . '</h2>';
         echo '<p>';
-        echo '<strong>Stored traces:</strong> ' . esc_html((string) $stats['count']) . '<br>';
-        echo '<strong>Total size:</strong> ' . esc_html((string) $size_mb) . ' MB';
+        echo '<strong>' . esc_html__('Stored traces:', 'wp-flame') . '</strong> ' . esc_html((string) $stats['count']) . '<br>';
+        echo '<strong>' . esc_html__('Total size:', 'wp-flame') . '</strong> ' . esc_html((string) $size_mb) . ' MB';
         echo '</p>';
 
         echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
         echo '<input type="hidden" name="action" value="wp_flame_purge">';
         wp_nonce_field('wp_flame_purge');
-        echo '<button type="submit" class="button button-secondary" onclick="return confirm(\'Are you sure you want to delete all traces? This cannot be undone.\')">Purge All Traces</button>';
+        echo '<button type="submit" class="button button-secondary" onclick="return confirm(\'' . esc_js(__('Are you sure you want to delete all traces? This cannot be undone.', 'wp-flame')) . '\')">' . esc_html__('Purge All Traces', 'wp-flame') . '</button>';
         echo '</form>';
         echo '</div>';
 

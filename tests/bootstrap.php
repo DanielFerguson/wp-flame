@@ -14,6 +14,42 @@ if (! defined('ABSPATH')) {
     define('ABSPATH', '/var/www/html/');
 }
 
+// ---------------------------------------------------------------------------
+// WordPress i18n function stubs for unit tests (no WP loaded).
+// Each function returns the original string so assertions on string content
+// continue to work exactly as before.
+// ---------------------------------------------------------------------------
+if (! function_exists('__')) {
+    function __(string $text, string $domain = 'default'): string
+    {
+        return $text;
+    }
+}
+if (! function_exists('esc_html__')) {
+    function esc_html__(string $text, string $domain = 'default'): string
+    {
+        return htmlspecialchars($text, ENT_QUOTES, 'UTF-8');
+    }
+}
+if (! function_exists('esc_attr__')) {
+    function esc_attr__(string $text, string $domain = 'default'): string
+    {
+        return htmlspecialchars($text, ENT_QUOTES, 'UTF-8');
+    }
+}
+if (! function_exists('esc_html_e')) {
+    function esc_html_e(string $text, string $domain = 'default'): void
+    {
+        echo htmlspecialchars($text, ENT_QUOTES, 'UTF-8');
+    }
+}
+if (! function_exists('esc_js')) {
+    function esc_js(string $text): string
+    {
+        return addslashes($text);
+    }
+}
+
 // If running integration suite, load WordPress test framework
 $is_integration = getenv('WP_TESTS_DIR') !== false;
 

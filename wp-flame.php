@@ -179,7 +179,7 @@ function wp_flame_init(): void {
         }
         $wp_admin_bar->add_node( [
             'id'    => 'wp-flame-trace',
-            'title' => '🔥 Trace This Page',
+            'title' => '🔥 ' . esc_html__( 'Trace This Page', 'wp-flame' ),
             'href'  => '#',
         ] );
     }, 999 );
@@ -202,7 +202,13 @@ function wp_flame_init(): void {
             delete_transient( 'wp_flame_last_force_trace_' . get_current_user_id() );
             $url = admin_url( 'tools.php?page=wp-flame&trace_id=' . urlencode( $trace_id ) );
             echo '<div class="notice notice-success is-dismissible"><p>';
-            echo '<strong>WP Flame:</strong> Trace captured! <a href="' . esc_url( $url ) . '">View flame graph &rarr;</a>';
+            echo wp_kses_post(
+                sprintf(
+                    /* translators: %s: URL to view the flame graph */
+                    __( '<strong>WP Flame:</strong> Trace captured! <a href="%s">View flame graph &rarr;</a>', 'wp-flame' ),
+                    esc_url( $url )
+                )
+            );
             echo '</p></div>';
         }
     } );

@@ -27,8 +27,8 @@ class Admin
     public function add_menu(): void
     {
         add_management_page(
-            'WP Flame',
-            'WP Flame',
+            __('WP Flame', 'wp-flame'),
+            __('WP Flame', 'wp-flame'),
             'manage_options',
             'wp-flame',
             [$this, 'render_page']
@@ -38,7 +38,7 @@ class Admin
     public function render_page(): void
     {
         if (! current_user_can('manage_options')) {
-            wp_die('You do not have permission to access this page.');
+            wp_die(esc_html__('You do not have permission to access this page.', 'wp-flame'));
         }
 
         $this->handle_delete();
@@ -62,7 +62,7 @@ class Admin
         check_admin_referer('wp_flame_delete_' . $trace_id);
 
         if (! current_user_can('manage_options')) {
-            wp_die('Unauthorized.');
+            wp_die(esc_html__('Unauthorized.', 'wp-flame'));
         }
 
         $this->storage->delete_trace($trace_id);
@@ -94,33 +94,39 @@ class Admin
         $pages  = (int) ceil($total / $per_page);
 
         echo '<div class="wrap">';
-        echo '<h1>WP Flame</h1>';
-        echo '<p><a href="' . esc_url(admin_url('options-general.php?page=wp-flame-settings')) . '">Settings</a></p>';
+        echo '<h1>' . esc_html__('WP Flame', 'wp-flame') . '</h1>';
+        echo '<p><a href="' . esc_url(admin_url('options-general.php?page=wp-flame-settings')) . '">' . esc_html__('Settings', 'wp-flame') . '</a></p>';
 
         $deleted_key = 'wp_flame_deleted_' . get_current_user_id();
         if (get_transient($deleted_key)) {
             delete_transient($deleted_key);
-            echo '<div class="notice notice-success is-dismissible"><p>Trace deleted.</p></div>';
+            echo '<div class="notice notice-success is-dismissible"><p>' . esc_html__('Trace deleted.', 'wp-flame') . '</p></div>';
         }
 
         // Search/filter form
         echo '<form method="get">';
         echo '<input type="hidden" name="page" value="wp-flame">';
         echo '<div class="tablenav top"><div class="alignleft">';
-        echo '<input type="search" name="s" value="' . esc_attr($filters['url'] ?? '') . '" placeholder="Filter by URL...">';
-        echo ' <input type="number" name="min_duration" value="' . esc_attr(isset($filters['min_duration']) ? (string) $filters['min_duration'] : '') . '" placeholder="Min ms..." step="any" style="width:100px">';
-        echo ' <input type="submit" class="button" value="Filter">';
+        echo '<input type="search" name="s" value="' . esc_attr($filters['url'] ?? '') . '" placeholder="' . esc_attr__('Filter by URL...', 'wp-flame') . '">';
+        echo ' <input type="number" name="min_duration" value="' . esc_attr(isset($filters['min_duration']) ? (string) $filters['min_duration'] : '') . '" placeholder="' . esc_attr__('Min ms...', 'wp-flame') . '" step="any" style="width:100px">';
+        echo ' <input type="submit" class="button" value="' . esc_attr__('Filter', 'wp-flame') . '">';
         echo '</div></div>';
         echo '</form>';
 
         // Table
         echo '<table class="widefat striped wp-flame-traces">';
         echo '<thead><tr>';
-        echo '<th>URL</th><th>Method</th><th>Duration</th><th>Queries</th><th>Memory</th><th>Date</th><th>Actions</th>';
+        echo '<th>' . esc_html__('URL', 'wp-flame') . '</th>';
+        echo '<th>' . esc_html__('Method', 'wp-flame') . '</th>';
+        echo '<th>' . esc_html__('Duration', 'wp-flame') . '</th>';
+        echo '<th>' . esc_html__('Queries', 'wp-flame') . '</th>';
+        echo '<th>' . esc_html__('Memory', 'wp-flame') . '</th>';
+        echo '<th>' . esc_html__('Date', 'wp-flame') . '</th>';
+        echo '<th>' . esc_html__('Actions', 'wp-flame') . '</th>';
         echo '</tr></thead><tbody>';
 
         if (empty($traces)) {
-            echo '<tr><td colspan="7">No traces found. Browse your site as an admin to generate traces.</td></tr>';
+            echo '<tr><td colspan="7">' . esc_html__('No traces found. Browse your site as an admin to generate traces.', 'wp-flame') . '</td></tr>';
         }
 
         foreach ($traces as $row) {
@@ -136,11 +142,11 @@ class Admin
             echo '<td>' . esc_html($mem_mb) . ' MB</td>';
             echo '<td>' . esc_html($row['created_at']) . '</td>';
             echo '<td>';
-            echo '<a href="' . esc_url($view_url) . '">View</a> | ';
+            echo '<a href="' . esc_url($view_url) . '">' . esc_html__('View', 'wp-flame') . '</a> | ';
             echo '<form method="post" style="display:inline">';
             wp_nonce_field('wp_flame_delete_' . $row['trace_id']);
             echo '<input type="hidden" name="wp_flame_delete_trace" value="' . esc_attr($row['trace_id']) . '">';
-            echo '<button type="submit" class="button-link" onclick="return confirm(\'Delete this trace?\')">Delete</button>';
+            echo '<button type="submit" class="button-link" onclick="return confirm(\'' . esc_js(__('Delete this trace?', 'wp-flame')) . '\')">' . esc_html__('Delete', 'wp-flame') . '</button>';
             echo '</form>';
             echo '</td></tr>';
         }
@@ -168,29 +174,29 @@ class Admin
         $trace = $this->storage->get_trace($trace_id);
 
         if (! $trace) {
-            echo '<div class="wrap"><h1>WP Flame</h1>';
-            echo '<div class="notice notice-error"><p>Trace not found.</p></div></div>';
+            echo '<div class="wrap"><h1>' . esc_html__('WP Flame', 'wp-flame') . '</h1>';
+            echo '<div class="notice notice-error"><p>' . esc_html__('Trace not found.', 'wp-flame') . '</p></div></div>';
             return;
         }
 
         echo '<div class="wrap">';
         echo '<h1>';
-        echo '<a href="' . esc_url(admin_url('tools.php?page=wp-flame')) . '">&larr; All Traces</a>';
+        echo '<a href="' . esc_url(admin_url('tools.php?page=wp-flame')) . '">&larr; ' . esc_html__('All Traces', 'wp-flame') . '</a>';
         echo ' &mdash; ' . esc_html($trace->method) . ' ' . esc_html($trace->url);
         echo '</h1>';
 
         // Summary stats bar — matches marketing mockup layout
         echo '<div class="wp-flame-summary">';
         echo '<div class="wp-flame-stat">';
-        echo '<span class="wp-flame-stat-label">TOTAL TIME</span>';
+        echo '<span class="wp-flame-stat-label">' . esc_html__('TOTAL TIME', 'wp-flame') . '</span>';
         echo '<span class="wp-flame-stat-value">' . esc_html(round($trace->total_ms)) . '<small>ms</small></span>';
         echo '</div>';
         echo '<div class="wp-flame-stat">';
-        echo '<span class="wp-flame-stat-label">DB QUERIES</span>';
+        echo '<span class="wp-flame-stat-label">' . esc_html__('DB QUERIES', 'wp-flame') . '</span>';
         echo '<span class="wp-flame-stat-value">' . esc_html($trace->query_count) . ' <small>(' . esc_html(round($trace->total_query_ms)) . 'ms)</small></span>';
         echo '</div>';
         echo '<div class="wp-flame-stat">';
-        echo '<span class="wp-flame-stat-label">PEAK MEMORY</span>';
+        echo '<span class="wp-flame-stat-label">' . esc_html__('PEAK MEMORY', 'wp-flame') . '</span>';
         echo '<span class="wp-flame-stat-value">' . esc_html(round($trace->peak_memory / 1048576)) . '<small>MB</small></span>';
         echo '</div>';
         echo '<div class="wp-flame-stat-right">';
@@ -201,11 +207,11 @@ class Admin
         // Color legend
         echo '<div class="wp-flame-legend">';
         $legend_items = [
-            ['color' => '#6c7086', 'label' => 'Core'],
-            ['color' => '#7c3aed', 'label' => 'Plugins'],
-            ['color' => '#22c55e', 'label' => 'Theme'],
-            ['color' => '#ef4444', 'label' => 'Database'],
-            ['color' => '#f59e0b', 'label' => 'External HTTP'],
+            ['color' => '#6c7086', 'label' => __('Core', 'wp-flame')],
+            ['color' => '#7c3aed', 'label' => __('Plugins', 'wp-flame')],
+            ['color' => '#22c55e', 'label' => __('Theme', 'wp-flame')],
+            ['color' => '#ef4444', 'label' => __('Database', 'wp-flame')],
+            ['color' => '#f59e0b', 'label' => __('External HTTP', 'wp-flame')],
         ];
         foreach ($legend_items as $item) {
             echo '<span class="wp-flame-legend-item">';
@@ -223,7 +229,7 @@ class Admin
         $insights = \WPFlame\Insights::analyze($trace);
         if (!empty($insights)) {
             echo '<div class="wp-flame-insights">';
-            echo '<h3>Insights</h3>';
+            echo '<h3>' . esc_html__('Insights', 'wp-flame') . '</h3>';
             foreach ($insights as $insight) {
                 $class = $insight['severity'] === 'warning' ? 'wp-flame-insight-warning' : 'wp-flame-insight-info';
                 echo '<div class="wp-flame-insight ' . esc_attr($class) . '">';
@@ -286,15 +292,21 @@ class Admin
         $mu_file = defined('WPMU_PLUGIN_DIR') ? WPMU_PLUGIN_DIR . '/wp-flame-early-hooks.php' : '';
         if ($mu_file && ! file_exists($mu_file)) {
             echo '<div class="notice notice-warning"><p>';
-            echo '<strong>WP Flame</strong> is running in limited mode &mdash; plugin load timing is unavailable. ';
-            echo 'Copy <code>wp-flame/mu-plugin/wp-flame-early-hooks.php</code> to <code>wp-content/mu-plugins/</code> for full instrumentation.';
+            echo wp_kses_post(
+                sprintf(
+                    /* translators: 1: source mu-plugin path, 2: destination directory */
+                    __('<strong>WP Flame</strong> is running in limited mode &mdash; plugin load timing is unavailable. Copy <code>%1$s</code> to <code>%2$s</code> for full instrumentation.', 'wp-flame'),
+                    'wp-flame/mu-plugin/wp-flame-early-hooks.php',
+                    'wp-content/mu-plugins/'
+                )
+            );
             echo '</p></div>';
         }
 
         global $wpdb;
         if (! ($wpdb instanceof DB) && get_class($wpdb) !== 'wpdb') {
             echo '<div class="notice notice-info"><p>';
-            echo '<strong>WP Flame</strong>: DB query instrumentation is disabled &mdash; another plugin is modifying the database layer.';
+            echo wp_kses_post(__('<strong>WP Flame</strong>: DB query instrumentation is disabled &mdash; another plugin is modifying the database layer.', 'wp-flame'));
             echo '</p></div>';
         }
     }
