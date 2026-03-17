@@ -176,7 +176,7 @@ class Collector
         }
     }
 
-    public function get_trace(): Trace
+    public function get_trace(array $meta = []): Trace
     {
         $total_ms = (microtime(true) - $this->request_start) * 1000;
 
@@ -189,7 +189,8 @@ class Collector
             (int) memory_get_peak_usage(true),
             PHP_VERSION,
             function_exists('get_bloginfo') ? get_bloginfo('version', 'raw') : '',
-            $this->spans
+            $this->spans,
+            $meta
         );
     }
 

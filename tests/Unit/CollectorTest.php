@@ -396,6 +396,16 @@ class CollectorTest extends TestCase
         $this->assertCount(0, $trace->spans);
     }
 
+    public function test_get_trace_passes_meta(): void
+    {
+        $collector = Collector::instance();
+        $collector->start_request(microtime(true));
+
+        $trace = $collector->get_trace(['key' => 'value']);
+
+        $this->assertSame('value', $trace->meta['key']);
+    }
+
     public function test_add_span_meta_noop_when_span_id_not_found(): void
     {
         $collector = Collector::instance();
