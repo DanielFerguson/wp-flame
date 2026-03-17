@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+- Score column is now sortable in the trace list (click to sort by performance score)
+
+### Changed
+- Version updated to 1.0.0
+- Author set to Chepstowe Consulting (https://www.chepstowe.consulting)
+
 ## [1.0.0] - 2026-03-17
 
 ### Added
