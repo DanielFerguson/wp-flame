@@ -424,4 +424,83 @@ class CollectorTest extends TestCase
         $this->assertArrayNotHasKey('status', $trace->spans[0]->meta);
         $this->assertSame('https://example.com', $trace->spans[0]->meta['url']);
     }
+
+    public function test_add_completed_span_creates_span_with_precomputed_timing(): void
+    {
+        $collector = Collector::instance();
+        $collector->start_request(1000.0); // request started at t=1000
+
+        // Query started at t=1000.050 (50ms after request), lasted 0.002s (2ms)
+        $id = $collector->add_completed_span(
+            'SELECT',
+            Span::TYPE_DB,
+            'some-plugin',
+            1000.050,
+            0.002,
+            ['query' => 'SELECT 1']
+        );
+
+        $this->assertIsString($id);
+        $this->assertNotEmpty($id);
+
+        $trace = $collector->get_trace();
+        $this->assertCount(1, $trace->spans);
+
+        $span = $trace->spans[0];
+        $this->assertSame('SELECT', $span->name);
+        $this->assertSame(Span::TYPE_DB, $span->type);
+        $this->assertSame('some-plugin', $span->source);
+        $this->assertEqualsWithDelta(50.0, $span->start_ms, 0.01);
+        $this->assertEqualsWithDelta(2.0, $span->duration_ms, 0.01);
+        $this->assertSame(['query' => 'SELECT 1'], $span->meta);
+    }
+
+    public function test_add_completed_span_uses_current_parent_from_stack(): void
+    {
+        $collector = Collector::instance();
+        $collector->start_request(1000.0);
+
+        $parent_id = $collector->start_span('Resolver', Span::TYPE_PLUGIN, 'wpgraphql');
+
+        // DB query happens while resolver span is open
+        $collector->add_completed_span('SELECT', Span::TYPE_DB, 'wordpress', 1000.010, 0.001);
+
+        $collector->end_span($parent_id);
+
+        $trace = $collector->get_trace();
+        $this->assertCount(2, $trace->spans);
+
+        $spans_by_name = [];
+        foreach ($trace->spans as $span) {
+            $spans_by_name[$span->name] = $span;
+        }
+
+        $this->assertSame($parent_id, $spans_by_name['SELECT']->parent_id);
+        $this->assertNull($spans_by_name['Resolver']->parent_id);
+    }
+
+    public function test_add_completed_span_has_null_parent_when_stack_empty(): void
+    {
+        $collector = Collector::instance();
+        $collector->start_request(1000.0);
+
+        $collector->add_completed_span('SELECT', Span::TYPE_DB, 'wordpress', 1000.010, 0.001);
+
+        $trace = $collector->get_trace();
+        $this->assertCount(1, $trace->spans);
+        $this->assertNull($trace->spans[0]->parent_id);
+    }
+
+    public function test_add_completed_span_noop_when_stopped(): void
+    {
+        $collector = Collector::instance();
+        $collector->start_request(1000.0);
+        $collector->stop();
+
+        $id = $collector->add_completed_span('SELECT', Span::TYPE_DB, 'test', 1000.0, 0.001);
+
+        $this->assertSame('', $id);
+        $trace = $collector->get_trace();
+        $this->assertCount(0, $trace->spans);
+    }
 }
