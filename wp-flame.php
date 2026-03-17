@@ -111,8 +111,9 @@ add_action( 'plugins_loaded', 'wp_flame_init', 0 );
 
 function wp_flame_init(): void {
     $collector = WPFlame\Collector::instance();
+    $config = WPFlame\Config::instance();
 
-    if ( ! get_option( 'wp_flame_enabled', true ) ) {
+    if ( ! $config->get( 'wp_flame_enabled', true ) ) {
         // Stop the collector if the mu-plugin already started it
         if ( $collector->is_initialized() ) {
             $collector->stop();
@@ -183,11 +184,11 @@ function wp_flame_init(): void {
         if ( ! defined( 'SAVEQUERIES' ) ) {
             define( 'SAVEQUERIES', true );
         }
-        $graphql_inst = new WPFlame\GraphQL( $collector );
+        $graphql_inst = new WPFlame\GraphQL( $collector, (bool) $config->get( 'wp_flame_full_query_text', false ) );
         $GLOBALS['wp_flame_skip_callback_wrapping'] = true;
     } else {
         if ( WPFlame\DB::can_replace( $wpdb ) ) {
-            $GLOBALS['wpdb'] = WPFlame\DB::from_wpdb( $wpdb, $collector );
+            $GLOBALS['wpdb'] = WPFlame\DB::from_wpdb( $wpdb, $collector, (bool) $config->get( 'wp_flame_full_query_text', false ) );
         }
         $GLOBALS['wp_flame_skip_callback_wrapping'] = false;
     }
@@ -295,7 +296,7 @@ function wp_flame_init(): void {
     } );
 
     // Per-callback instrumentation — guarded by flag (cleared on GraphQL false-positive)
-    $min_callback_ms = (float) get_option( 'wp_flame_min_callback_ms', 0.5 );
+    $min_callback_ms = (float) $config->get( 'wp_flame_min_callback_ms', 0.5 );
 
     add_action( 'plugins_loaded', function () use ( $collector, $min_callback_ms ) {
         if ( ! empty( $GLOBALS['wp_flame_skip_callback_wrapping'] ) ) {
@@ -331,7 +332,7 @@ function wp_flame_init(): void {
 
             global $wpdb;
             if ( WPFlame\DB::can_replace( $wpdb ) ) {
-                $GLOBALS['wpdb'] = WPFlame\DB::from_wpdb( $wpdb, $collector );
+                $GLOBALS['wpdb'] = WPFlame\DB::from_wpdb( $wpdb, $collector, (bool) WPFlame\Config::instance()->get( 'wp_flame_full_query_text', false ) );
             }
 
             $GLOBALS['wp_flame_skip_callback_wrapping'] = false;
@@ -341,6 +342,7 @@ function wp_flame_init(): void {
 
 function wp_flame_shutdown(): void {
     $collector = WPFlame\Collector::instance();
+    $config = WPFlame\Config::instance();
 
     if ( ! $collector->is_initialized() ) {
         return;
@@ -366,7 +368,7 @@ function wp_flame_shutdown(): void {
 
     if ( ! $force_trace && ! $is_cron ) {
         // Audience check
-        $audience = get_option( 'wp_flame_trace_audience', 'admins' );
+        $audience = $config->get( 'wp_flame_trace_audience', 'admins' );
         if ( $audience === 'admins' && empty( $GLOBALS['wp_flame_is_admin_request'] ) ) {
             return;
         } elseif ( $audience === 'logged_in' && ! is_user_logged_in() ) {
@@ -375,7 +377,7 @@ function wp_flame_shutdown(): void {
         // 'everyone' always passes
 
         // Sampling check
-        $sample_rate = max( 1, (int) get_option( 'wp_flame_sample_rate', 1 ) );
+        $sample_rate = max( 1, (int) $config->get( 'wp_flame_sample_rate', 1 ) );
         if ( $sample_rate > 1 && rand( 1, $sample_rate ) !== 1 ) {
             return;
         }
@@ -399,7 +401,7 @@ function wp_flame_shutdown(): void {
         : '';
 
     // IP address (if tracking enabled)
-    $track_ips  = get_option( 'wp_flame_track_ips', true );
+    $track_ips  = $config->get( 'wp_flame_track_ips', true );
     $ip_address = $track_ips ? wp_flame_get_client_ip() : '';
 
     // Step 4: Build trace
@@ -422,8 +424,8 @@ function wp_flame_shutdown(): void {
     $storage->save_trace( $trace, $score_result['score'], $user_id, $ip_address );
 
     // Step 7: Check performance budget thresholds
-    $budget_max_ms      = (int) get_option( 'wp_flame_budget_max_ms', 500 );
-    $budget_max_queries = (int) get_option( 'wp_flame_budget_max_queries', 100 );
+    $budget_max_ms      = (int) $config->get( 'wp_flame_budget_max_ms', 500 );
+    $budget_max_queries = (int) $config->get( 'wp_flame_budget_max_queries', 100 );
 
     $exceeded = false;
     if ( $budget_max_ms > 0 && $trace->total_ms > $budget_max_ms ) {

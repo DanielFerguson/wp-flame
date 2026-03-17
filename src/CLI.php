@@ -140,7 +140,7 @@ class CLI
             return;
         }
 
-        $days = (int) ($assoc_args['days'] ?? get_option('wp_flame_retention_days', 7));
+        $days = (int) ($assoc_args['days'] ?? \WPFlame\Config::instance()->get( 'wp_flame_retention_days', 7 ));
         $this->storage->prune_old($days);
         \WP_CLI::success("Pruned traces older than {$days} day(s).");
     }

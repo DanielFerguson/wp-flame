@@ -155,10 +155,8 @@ namespace WPFlame\Tests\Unit {
 
         public function test_db_hook_keeps_full_query_when_setting_enabled(): void
         {
-            $GLOBALS['wp_flame_test_options']['wp_flame_full_query_text'] = true;
-
             $collector = $this->make_collector();
-            $gql = new GraphQL($collector);
+            $gql = new GraphQL($collector, true);
 
             $callback = $GLOBALS['wp_flame_test_filters']['log_query_custom_data'][0]['callback'];
 

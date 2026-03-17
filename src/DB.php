@@ -16,7 +16,7 @@ class DB extends \wpdb
     /**
      * Create an instrumented DB instance from an existing wpdb.
      */
-    public static function from_wpdb(\wpdb $original, Collector $collector): self
+    public static function from_wpdb( \wpdb $original, Collector $collector, bool $full_query_text = false ): self
     {
         $reflection = new \ReflectionClass(self::class);
         /** @var self $instance */
@@ -28,7 +28,7 @@ class DB extends \wpdb
         }
 
         $instance->collector = $collector;
-        $instance->full_query_text = (bool) get_option('wp_flame_full_query_text', false);
+        $instance->full_query_text = $full_query_text;
 
         return $instance;
     }

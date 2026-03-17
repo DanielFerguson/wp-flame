@@ -57,6 +57,12 @@ if ( ! function_exists( 'apply_filters' ) ) {
 if ( ! function_exists( 'add_filter' ) ) {
     function add_filter( $hook, $callback, $priority = 10, $accepted_args = 1 ) { return true; }
 }
+if ( ! function_exists( 'get_option' ) ) {
+    function get_option( $option, $default = false ) {
+        return $default;
+    }
+}
+
 if ( ! function_exists( 'get_user_by' ) ) {
     function get_user_by( $field, $value ) { return false; }
 }

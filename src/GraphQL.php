@@ -23,10 +23,10 @@ class GraphQL
     /** @var callable|null Stored for remove_filter() in deactivate() */
     private $db_hook_callback = null;
 
-    public function __construct(Collector $collector)
+    public function __construct( Collector $collector, bool $full_query_text = false )
     {
         $this->collector = $collector;
-        $this->full_query_text = (bool) get_option('wp_flame_full_query_text', false);
+        $this->full_query_text = $full_query_text;
         $this->register_db_hooks();
     }
 
