@@ -49,11 +49,16 @@ class DB extends \wpdb
      */
     public function query($query)
     {
+        $meta = [
+            'query'      => $this->truncate_query( $query ),
+            'query_hash' => md5( $this->normalize_query( $query ) ),
+        ];
+
         $span_id = $this->collector->start_span(
             $this->extract_query_type($query),
             Span::TYPE_DB,
             $this->get_caller_source(),
-            ['query' => $this->truncate_query($query)]
+            $meta
         );
 
         $result = parent::query($query);
@@ -84,6 +89,25 @@ class DB extends \wpdb
             return $query;
         }
         return substr($query, 0, 200);
+    }
+
+    /**
+     * Normalize a query by replacing literal values with placeholders.
+     *
+     * @param string $query
+     * @return string Normalized query suitable for fingerprinting.
+     */
+    private function normalize_query( string $query ): string
+    {
+        // Replace string literals
+        $normalized = preg_replace( "/'[^']*'/", '?', $query );
+        // Replace numeric literals
+        $normalized = preg_replace( '/\b\d+\b/', '?', $normalized );
+        // Replace IN lists
+        $normalized = preg_replace( '/IN\s*\(\s*\?(?:\s*,\s*\?)*\s*\)/i', 'IN (?)', $normalized );
+        // Collapse whitespace
+        $normalized = preg_replace( '/\s+/', ' ', trim( $normalized ) );
+        return $normalized;
     }
 
     /**

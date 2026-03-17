@@ -89,22 +89,25 @@ class Insights
                 continue;
             }
 
-            if (! isset($groups[$query])) {
-                $groups[$query] = ['count' => 0, 'total_ms' => 0.0];
+            $group_key = $span->meta['query_hash'] ?? $span->meta['query'] ?? '';
+
+            if (! isset($groups[$group_key])) {
+                $groups[$group_key] = ['count' => 0, 'total_ms' => 0.0, 'query' => $query];
             }
 
-            $groups[$query]['count']++;
-            $groups[$query]['total_ms'] += $span->duration_ms;
+            $groups[$group_key]['count']++;
+            $groups[$group_key]['total_ms'] += $span->duration_ms;
         }
 
         $raw_insights = [];
 
-        foreach ($groups as $query => $data) {
+        foreach ($groups as $data) {
             $count = $data['count'];
             if ($count < 2) {
                 continue;
             }
 
+            $query        = $data['query'];
             $severity     = $count >= 4 ? 'warning' : 'info';
             $total_ms     = round($data['total_ms']);
             $query_type   = self::extract_query_type($query);
