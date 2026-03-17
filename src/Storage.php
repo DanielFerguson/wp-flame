@@ -284,6 +284,18 @@ class Storage
         );
     }
 
+    /**
+     * Delete all traces for a specific user.
+     *
+     * @param int $user_id
+     * @return int Number of rows deleted.
+     */
+    public function delete_traces_by_user( int $user_id ): int
+    {
+        $result = $this->wpdb->delete( $this->table, [ 'user_id' => $user_id ], [ '%d' ] );
+        return $result !== false ? $result : 0;
+    }
+
     public function prune_old(int $days): void
     {
         $this->wpdb->query(

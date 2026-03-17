@@ -224,6 +224,10 @@ function wp_flame_init(): void {
     $settings = new WPFlame\Settings( new WPFlame\Storage( $wpdb ) );
     $settings->register();
 
+    // Register GDPR data export/erasure hooks (must run on all requests, not just admin)
+    $privacy = new WPFlame\Privacy( new WPFlame\Storage( $wpdb ) );
+    $privacy->register();
+
     // Admin bar button — only on frontend pages for users with manage_options
     add_action( 'admin_bar_menu', function ( $wp_admin_bar ) {
         if ( ! current_user_can( 'manage_options' ) ) {
