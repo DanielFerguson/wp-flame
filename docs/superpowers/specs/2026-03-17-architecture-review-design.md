@@ -12,7 +12,7 @@ WP Flame is a self-hosted WordPress APM plugin (~5,000 lines PHP, pure SVG flame
 
 The roadmap includes: site profiles + onboarding, plugin knowledge base, N+1 query detection, performance coaching, testing mode, LLM trace analysis, and anonymous telemetry aggregation. Each of these requires extensibility, data model evolution, and UI expansion that the current architecture does not cleanly support.
 
-This spec documents 35 findings across four dimensions (architecture, data model, instrumentation, frontend/security) and organizes them into three implementation tiers.
+This spec documents 39 findings across four dimensions (architecture, data model, instrumentation, frontend/security) and organizes them into three implementation tiers.
 
 ---
 
@@ -22,7 +22,7 @@ These are architectural foundations that are cheap to add now and expensive to r
 
 ### 1.1 Add Core Hooks/Filters
 
-**Problem:** Zero `do_action` or `apply_filters` calls exist in `src/`. The plugin is entirely self-contained with no extension surface. This blocks the knowledge base (can't annotate insights), site profiles (can't filter traces), third-party integrations (can't add spans or rules), and telemetry (can't forward stored traces).
+**Problem:** The plugin exposes no extension hooks for third parties (it consumes WordPress hooks but provides none of its own). This blocks the knowledge base (can't annotate insights), site profiles (can't filter traces), third-party integrations (can't add spans or rules), and telemetry (can't forward stored traces).
 
 **Change:** Add four hooks at strategic integration points (a fifth, `wp_flame_instrumentors`, is deferred to Tier 2.1 where the Instrumentor interface is introduced):
 
@@ -40,7 +40,12 @@ do_action('wp_flame_trace_stored', $trace, $score_result);
 $insights = apply_filters('wp_flame_insights', $insights, $trace);
 ```
 
-Note: The `wp_flame_instrumentors` filter is deferred to Tier 2.1, where the `Instrumentor` interface and the `$instrumentors` array are introduced together. Adding this hook in Tier 1 would have no consumers.
+**Implementation notes:**
+
+- The `wp_flame_instrumentors` filter is deferred to Tier 2.1, where the `Instrumentor` interface and the `$instrumentors` array are introduced together. Adding this hook in Tier 1 would have no consumers.
+- `wp_flame_trace_meta` fires AFTER `ip_address` and `user_id` have been removed from `$request_meta` (per Tier 1.4). Third-party code should not re-inject PII into trace meta.
+- `wp_flame_trace_stored` fires after `$collector->stop()`. Hook callbacks CANNOT add spans to the collector — `start_span()` returns `''` when stopped. This is the correct constraint for a post-storage notification hook.
+- `wp_flame_should_store_trace` fires after `$collector->get_trace()` and `Score::calculate()` have already run (expensive work). This is acceptable because the sampling/audience early-exit already handles the high-frequency case. This filter targets the lower-frequency "conditionally discard based on trace content" use case (e.g., site profiles filtering by URL pattern).
 
 **Files affected:** `wp-flame.php` (shutdown handler), `src/Admin.php` (flame graph insight rendering and dashboard insight rendering).
 
@@ -79,9 +84,13 @@ class Config {
 }
 ```
 
-All `get_option('wp_flame_*')` calls are replaced with `$config->get()`. The `Config` instance is constructed in `wp_flame_init()` and passed to consumers.
+All `get_option('wp_flame_*')` calls in the main plugin are replaced with `$config->get()`. The `Config` instance is constructed in `wp_flame_init()` and passed to consumers.
 
-**Files affected:** `wp-flame.php`, `src/Settings.php`, `src/DB.php`, `src/GraphQL.php`, `src/CLI.php`, `mu-plugin/wp-flame-early-hooks.php`.
+**Important:** The mu-plugin runs before `wp_flame_init()`, so it cannot use the `Config` instance. The mu-plugin's early bailout (Tier 3.11) must call `get_option()` directly — this is the only acceptable exception.
+
+**Migration hazard:** `Config::get()` defaults to `false`, but many existing `get_option()` calls use `true` as the default (e.g., `get_option('wp_flame_enabled', true)`). Every migration from `get_option()` to `$config->get()` MUST explicitly pass the correct default parameter to avoid changing behavior on fresh installs where the option hasn't been set yet.
+
+**Files affected:** `wp-flame.php`, `src/DB.php`, `src/GraphQL.php`, `src/CLI.php`. Note: `src/Settings.php` uses `get_option()` primarily to display current values in form fields — these do NOT need to go through Config since they're render-time reads, not behavior-driving reads.
 
 ---
 
@@ -107,6 +116,16 @@ public function maybe_upgrade() {
 }
 ```
 
+**Performance note:** Do NOT instantiate `Storage` just to call `maybe_upgrade()`. In `wp_flame_init()`, check the option first:
+
+```php
+if ((int) get_option('wp_flame_schema_version', 0) < Storage::SCHEMA_VERSION) {
+    $storage->maybe_upgrade();
+}
+```
+
+This avoids the `dbDelta` overhead on every request. If `update_option()` fails inside `maybe_upgrade()`, the check will re-run on the next request — acceptable degradation.
+
 **Files affected:** `src/Storage.php`, `wp-flame.php` (call `maybe_upgrade()` at init).
 
 ---
@@ -117,7 +136,9 @@ public function maybe_upgrade() {
 
 **Change:** In `wp_flame_shutdown()`, remove `ip_address` and `user_id` from `$request_meta` before passing to `$collector->get_trace($request_meta)`. These values are already passed as separate arguments to `$storage->save_trace()` and stored in dedicated indexed columns.
 
-**Files affected:** `wp-flame.php` (shutdown handler, lines ~375-405).
+**Important dependency:** The flame graph view in `Admin.php` currently reads `$trace->meta['user_id']` and `$trace->meta['ip_address']` to display request context. After this change, those keys will be absent from `$trace->meta`. `Storage::get_trace()` must be updated to also SELECT `user_id`, `ip_address`, and `score` from the DB row columns and attach them to the returned Trace object (e.g., via a new `$trace->context` array or by returning a wrapper object). The Admin flame graph view must be updated to read from this new source instead of `$trace->meta`.
+
+**Files affected:** `wp-flame.php` (shutdown handler), `src/Storage.php` (`get_trace()` must return row-level columns alongside trace data), `src/Admin.php` (flame graph view must read user/IP from new source).
 
 ---
 
@@ -231,11 +252,14 @@ public function on_http_debug($response, $context, $class, $parsed_args, $url) {
 
 **Problem:** `get_caller_source()` is copy-pasted across `DB.php`, `Http.php`, and `GraphQL.php` — three identical implementations with a hardcoded backtrace depth of 15 frames. The depth may be insufficient for deeply nested stacks, causing misattribution to `'wordpress'`.
 
-**Change:** Create `src/SourceResolver.php`:
+**Change:** Create `src/SourceResolver.php` with two static methods to handle both calling patterns:
 
 ```php
 class SourceResolver {
     /**
+     * Capture a backtrace and resolve the source.
+     * Used by DB and Http instrumentors.
+     *
      * @param Collector $collector
      * @param int       $skip    Frames to skip (caller-specific)
      * @param int       $depth   Max backtrace depth
@@ -243,14 +267,98 @@ class SourceResolver {
      */
     public static function from_backtrace(Collector $collector, $skip = 0, $depth = 25) {
         $trace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, $depth);
+        return self::from_trace_array($collector, $trace, $skip);
+    }
+
+    /**
+     * Resolve source from a pre-captured backtrace array.
+     * Used by GraphQL instrumentor (receives backtrace from log_query_custom_data).
+     *
+     * @param Collector $collector
+     * @param array     $trace   Pre-captured backtrace
+     * @param int       $skip    Frames to skip
+     * @return string Source attribution string
+     */
+    public static function from_trace_array(Collector $collector, array $trace, $skip = 0) {
         // ... shared logic currently in DB::get_caller_source()
     }
 }
 ```
 
-Replace all three `get_caller_source()` implementations with calls to `SourceResolver::from_backtrace()`.
+Replace all three `get_caller_source()` implementations: `DB.php` and `Http.php` call `from_backtrace()`, `GraphQL.php` calls `from_trace_array()` with its existing backtrace parameter.
 
 **Files affected:** `src/DB.php`, `src/Http.php`, `src/GraphQL.php`, new file `src/SourceResolver.php`.
+
+---
+
+### 1.11 Fix uninstall.php: Clean Up Transients and Cron
+
+**Problem:** `uninstall.php` drops the table and removes `wp_flame_%` options, but does NOT:
+1. Delete transients (stored as `_transient_wp_flame_*` and `_transient_timeout_wp_flame_*` in `wp_options`, which don't match the `wp_flame_%` LIKE pattern).
+2. Clear the `wp_flame_prune_traces` cron schedule. While `wp_flame_deactivate()` clears it on deactivation, uninstall can bypass deactivation (e.g., manual file deletion followed by plugin cleanup). The orphaned cron event fires daily to a non-existent handler.
+
+**Change:** Add to `uninstall.php`:
+
+```php
+// Clear cron schedule
+wp_clear_scheduled_hook('wp_flame_prune_traces');
+
+// Delete transients
+$wpdb->query("DELETE FROM {$wpdb->options} WHERE option_name LIKE '\_transient\_wp\_flame\_%' OR option_name LIKE '\_transient\_timeout\_wp\_flame\_%'");
+```
+
+**Files affected:** `uninstall.php`.
+
+---
+
+### 1.12 mu-plugin Version Drift Detection
+
+**Problem:** The mu-plugin is copied at activation time. If the main plugin is updated (new phase hooks, autoloader path changes), the mu-plugin in `mu-plugins/` remains the OLD version until the admin deactivates and reactivates. There is no version check or auto-update mechanism. This will become critical as the mu-plugin evolves for Tier 2.7 (phase map branching).
+
+**Change:** Add a version constant to the mu-plugin:
+
+```php
+define('WP_FLAME_MU_VERSION', '1.1.1');
+```
+
+In `wp_flame_init()`, compare `WP_FLAME_MU_VERSION` against `WP_FLAME_VERSION`. If they differ, re-copy the mu-plugin from the bundled source (same logic as activation). Display an admin notice if the copy fails.
+
+**Files affected:** `mu-plugin/wp-flame-early-hooks.php`, `wp-flame.php` (init function).
+
+---
+
+### 1.13 Add Score Extension Hook
+
+**Problem:** `Score::calculate()` uses hardcoded factor weights and thresholds. Site profiles need different scoring (WooCommerce checkout should weight HTTP higher for payment gateways, Headless API should weight response time at 50% and drop callbacks). There is no extension surface.
+
+**Change:** Add a filter on the factors array before the weighted sum:
+
+```php
+$factors = [
+    'response_time'   => ['weight' => 0.35, 'best' => 100, 'worst' => 3000, 'value' => $total_ms],
+    'external_http'   => ['weight' => 0.20, 'best' => 0,   'worst' => 2000, 'value' => $http_ms],
+    // ...
+];
+$factors = apply_filters('wp_flame_score_factors', $factors, $trace);
+```
+
+This lets site profiles adjust weights and thresholds without forking Score.php.
+
+**Files affected:** `src/Score.php`.
+
+---
+
+### 1.14 Fix WP_FLAME_VERSION Constant Mismatch
+
+**Problem:** `wp-flame.php` line 21 defines `WP_FLAME_VERSION` as `'1.0.0'` but the plugin header (line 7) says `Version: 1.1.1`. This is a pre-existing bug that will cause version checks (including the proposed mu-plugin version drift detection in 1.12) to be wrong.
+
+**Change:** Update the constant to match the header:
+
+```php
+define('WP_FLAME_VERSION', '1.1.1');
+```
+
+**Files affected:** `wp-flame.php`.
 
 ---
 
@@ -397,6 +505,8 @@ FROM {$table}
 WHERE created_at >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL %d DAY)
 ```
 
+**Backfill strategy:** Existing rows will have NULL for new columns. Use `COALESCE(db_time_ms, 0)` in aggregate queries. A backfill migration is not worth the cost — old traces will age out via the retention policy within days. New traces written after the upgrade will have correct values.
+
 **Files affected:** `src/Storage.php`, `src/Admin.php` (or `src/Admin/DashboardView.php` after split).
 
 ---
@@ -459,9 +569,15 @@ Phase maps per type:
 - **cron:** only Bootstrap → Plugin Load → Init → Cron Execution
 - **admin:** replace `template_redirect` → Render with `admin_init` → Admin Render
 
-Note: Some constants (`REST_REQUEST`, `DOING_AJAX`) are not defined at mu-plugin time. The mu-plugin registers the common early phases (Bootstrap, Plugin Load, Theme Setup, Init), and `wp_flame_init()` registers the later phases based on detected request type.
+**Critical implementation detail:** The mu-plugin currently registers ALL phase transitions, including late phases (`wp` → Main Query, `template_redirect` → Render) that are frontend-specific. These registrations happen before `wp_flame_detect_request_type()` can run. The fix requires:
 
-**Files affected:** `mu-plugin/wp-flame-early-hooks.php`, `wp-flame.php`.
+1. The mu-plugin ONLY registers early universal phases: Bootstrap → Plugin Load → Theme Setup → Init.
+2. ALL late phases (after Init) move to `wp_flame_init()` where `wp_flame_detect_request_type()` is available.
+3. For WP-CLI, `WP_CLI` is defined before mu-plugins load, so CLI detection CAN happen in the mu-plugin to skip even Theme Setup if desired.
+
+Note: Some constants (`REST_REQUEST`, `DOING_AJAX`) are not defined at mu-plugin time. `is_admin()` is reliable at `plugins_loaded` but not at mu-plugin time.
+
+**Files affected:** `mu-plugin/wp-flame-early-hooks.php` (reduce to early phases only), `wp-flame.php` (add request-type-specific late phases).
 
 ---
 
@@ -785,11 +901,17 @@ Tier 1.3 (schema versioning) ──► Tier 2.5 (url_path column)
 Tier 1.1 (hooks) ──► Tier 2.1 (Instrumentor interface — adds wp_flame_instrumentors filter)
 Tier 1.1 (hooks) ──► Tier 2.3 (InsightRule interface)
 Tier 1.2 (Config) ──► Tier 2.1 (Instrumentor uses Config)
+Tier 1.4 (remove IP/user from meta) ──► Admin flame graph view update (read from DB row columns)
+Tier 1.12 (mu-plugin version drift) ──► Tier 2.7 (phase map branching — mu-plugin will evolve)
+Tier 1.14 (version constant fix) ──► Tier 1.12 (version drift detection depends on correct constant)
 Tier 2.1 (Instrumentor) ──► Tier 2.6 (third wrapping pass)
 Tier 2.2 (Admin split) ──► Tier 2.4 (SQL aggregates)
 ```
 
-All Tier 1 items are independent of each other and can be parallelized.
+All Tier 1 items are independent of each other EXCEPT:
+- 1.14 must land before 1.12 (version constant used by drift detection).
+- 1.4 has a hidden dependency on updating `Storage::get_trace()` and `Admin.php` flame graph view.
+
 Tier 2 items have the dependencies shown above.
 All Tier 3 items are independent and can be done in any order.
 
@@ -803,3 +925,6 @@ The following were noted during review but are deferred:
 - **Admin template system** — A full template engine (Blade, Twig) is overkill. Simple PHP partials in a `templates/` directory are sufficient.
 - **StorageInterface abstraction** — Useful for testing and remote telemetry, but the consumer surface is large (12+ methods). Design when the telemetry SaaS tier begins.
 - **Request-type-specific phase labels** — Covered in Tier 2.7. The mu-plugin changes require careful testing across all WordPress request types.
+- **Collector::end_span() out-of-order pops** — The stack pops regardless of ID match, meaning out-of-order closes produce incorrect span durations. A fix would require ID-aware stack traversal. Low practical impact since most spans close in LIFO order, but relevant for concurrent HTTP spans and batched GraphQL.
+- **Test infrastructure updates** — The proposed changes introduce new WordPress API calls (`do_action`, `apply_filters`, `get_option` via Config, GDPR hooks) that are not stubbed in `tests/bootstrap.php`. Unit tests for affected classes will need updated stubs or mocks. This should be handled during implementation of each tier item, not as a separate spec.
+- **Lazy reflection measurement** — Tier 3.2 (lazy reflection in CallbackWrapper) is a performance optimization, but `CallbackResolver` already caches by `$callback_id`. The actual overhead should be measured on a representative WooCommerce site before committing to the refactor.
