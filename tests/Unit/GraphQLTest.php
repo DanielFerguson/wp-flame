@@ -371,5 +371,99 @@ namespace WPFlame\Tests\Unit {
             $this->assertCount(1, $trace->spans);
             $this->assertSame('RootMutation.createPost', $trace->spans[0]->name);
         }
+
+        // -----------------------------------------------------------------------
+        // URL heuristic tests
+        // -----------------------------------------------------------------------
+
+        public function test_url_heuristic_matches_graphql_endpoint(): void
+        {
+            $this->assertTrue(GraphQL::is_graphql_endpoint('/graphql'));
+            $this->assertTrue(GraphQL::is_graphql_endpoint('/wp/graphql'));
+            $this->assertTrue(GraphQL::is_graphql_endpoint('/index.php/graphql'));
+        }
+
+        public function test_url_heuristic_rejects_non_graphql_urls(): void
+        {
+            $this->assertFalse(GraphQL::is_graphql_endpoint('/my-page/graphql-tools'));
+            $this->assertFalse(GraphQL::is_graphql_endpoint('/docs/graphql-api'));
+            $this->assertFalse(GraphQL::is_graphql_endpoint('/'));
+            $this->assertFalse(GraphQL::is_graphql_endpoint('/wp-admin/'));
+            $this->assertFalse(GraphQL::is_graphql_endpoint(''));
+        }
+
+        public function test_url_heuristic_custom_endpoint(): void
+        {
+            $this->assertTrue(GraphQL::is_graphql_endpoint('/api', 'api'));
+            $this->assertFalse(GraphQL::is_graphql_endpoint('/graphql', 'api'));
+        }
+
+        public function test_url_heuristic_trailing_slash_handled_by_caller(): void
+        {
+            // wp-flame.php calls rtrim($path, '/') before passing to is_graphql_endpoint.
+            // Verify the rtrim + method combination works for trailing-slash URLs:
+            $path_with_slash = rtrim('/graphql/', '/');
+            $this->assertTrue(GraphQL::is_graphql_endpoint($path_with_slash));
+
+            $nested_with_slash = rtrim('/wp/graphql/', '/');
+            $this->assertTrue(GraphQL::is_graphql_endpoint($nested_with_slash));
+        }
+
+        // -----------------------------------------------------------------------
+        // Tier 2 mode test
+        // -----------------------------------------------------------------------
+
+        public function test_tier2_mode_has_db_hooks_but_no_resolver_hooks(): void
+        {
+            $collector = $this->make_collector();
+            $gql = new GraphQL($collector);
+
+            // DB hooks are active
+            $this->assertArrayHasKey('log_query_custom_data', $GLOBALS['wp_flame_test_filters']);
+
+            // But NO resolver or operation hooks
+            $this->assertArrayNotHasKey('graphql_pre_resolve_field', $GLOBALS['wp_flame_test_filters']);
+            $this->assertArrayNotHasKey('graphql_resolve_field', $GLOBALS['wp_flame_test_filters']);
+            $this->assertArrayNotHasKey('graphql_process_request', $GLOBALS['wp_flame_test_filters']);
+            $this->assertArrayNotHasKey('graphql_return_response', $GLOBALS['wp_flame_test_filters']);
+        }
+
+        // -----------------------------------------------------------------------
+        // DB span parent-child with resolver as parent
+        // -----------------------------------------------------------------------
+
+        public function test_db_span_parent_is_resolver_span_when_on_stack(): void
+        {
+            $collector = $this->make_collector();
+            $gql = new GraphQL($collector);
+            $gql->activate_wpgraphql_hooks();
+
+            // Start a resolver span (simulating graphql_pre_resolve_field)
+            $pre_resolve = $GLOBALS['wp_flame_test_filters']['graphql_pre_resolve_field'][0]['callback'];
+            $pre_resolve(null, null, [], null, null, 'RootQuery', 'posts', null, null);
+
+            // Simulate a DB query during resolver execution
+            $db_callback = $GLOBALS['wp_flame_test_filters']['log_query_custom_data'][0]['callback'];
+            $db_callback([], 'SELECT * FROM wp_posts', 0.003, '', 1000.050);
+
+            // End the resolver span
+            $resolve = $GLOBALS['wp_flame_test_filters']['graphql_resolve_field'][0]['callback'];
+            $resolve(['data'], null, [], null, null, 'RootQuery', 'posts', null, null);
+
+            $trace = $collector->get_trace();
+            $this->assertCount(2, $trace->spans);
+
+            // Find spans by type
+            $db_span = null;
+            $resolver_span = null;
+            foreach ($trace->spans as $span) {
+                if ($span->type === Span::TYPE_DB) { $db_span = $span; }
+                if ($span->type === Span::TYPE_PLUGIN) { $resolver_span = $span; }
+            }
+
+            $this->assertNotNull($db_span);
+            $this->assertNotNull($resolver_span);
+            $this->assertSame($resolver_span->id, $db_span->parent_id);
+        }
     }
 }
