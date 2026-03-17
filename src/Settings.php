@@ -95,6 +95,13 @@ class Settings
                 return max(0, intval($value));
             },
         ]);
+        register_setting('wp_flame_settings', 'wp_flame_track_ips', [
+            'type'              => 'boolean',
+            'default'           => true,
+            'sanitize_callback' => function ($value) {
+                return (bool) $value;
+            },
+        ]);
 
         // Section
         add_settings_section(
@@ -149,6 +156,14 @@ class Settings
             'wp_flame_full_query_text',
             __('Full SQL Query Text', 'wp-flame'),
             [$this, 'render_field_full_query_text'],
+            'wp-flame-settings',
+            'wp_flame_general'
+        );
+
+        add_settings_field(
+            'wp_flame_track_ips',
+            __('Track IP addresses', 'wp-flame'),
+            [$this, 'render_field_track_ips'],
             'wp-flame-settings',
             'wp_flame_general'
         );
@@ -226,6 +241,16 @@ class Settings
         echo ' ' . esc_html__('Record full SQL query text', 'wp-flame');
         echo '</label>';
         echo '<p class="description">' . esc_html__('When enabled, the complete SQL query is stored with each trace. This may increase storage usage.', 'wp-flame') . '</p>';
+    }
+
+    public function render_field_track_ips(): void
+    {
+        $value = get_option('wp_flame_track_ips', true);
+        echo '<label>';
+        echo '<input type="checkbox" name="wp_flame_track_ips" value="1" ' . checked($value, true, false) . '>';
+        echo ' ' . esc_html__('Record IP addresses with traces', 'wp-flame');
+        echo '</label>';
+        echo '<p class="description">' . esc_html__('Record the IP address of each traced request. Disable for GDPR compliance. IPs are deleted with traces according to your retention policy.', 'wp-flame') . '</p>';
     }
 
     public function render_field_budget_max_ms(): void
