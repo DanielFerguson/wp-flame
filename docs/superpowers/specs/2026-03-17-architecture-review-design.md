@@ -24,7 +24,7 @@ These are architectural foundations that are cheap to add now and expensive to r
 
 **Problem:** Zero `do_action` or `apply_filters` calls exist in `src/`. The plugin is entirely self-contained with no extension surface. This blocks the knowledge base (can't annotate insights), site profiles (can't filter traces), third-party integrations (can't add spans or rules), and telemetry (can't forward stored traces).
 
-**Change:** Add five hooks at strategic integration points:
+**Change:** Add four hooks at strategic integration points (a fifth, `wp_flame_instrumentors`, is deferred to Tier 2.1 where the Instrumentor interface is introduced):
 
 ```php
 // In wp_flame_shutdown(), before Storage::save_trace()
