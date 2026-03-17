@@ -194,6 +194,7 @@ class Admin
         echo '<table class="widefat striped wp-flame-traces">';
         echo '<thead><tr>';
         echo '<th>' . esc_html__('URL', 'wp-flame') . '</th>';
+        echo '<th>' . esc_html__('Score', 'wp-flame') . '</th>';
         echo '<th>' . esc_html__('Method', 'wp-flame') . '</th>';
 
         foreach ($sortable_columns as $col => $label) {
@@ -208,7 +209,7 @@ class Admin
         echo '</tr></thead><tbody>';
 
         if (empty($traces)) {
-            echo '<tr><td colspan="7">' . esc_html__('No traces found. Browse your site as an admin to generate traces.', 'wp-flame') . '</td></tr>';
+            echo '<tr><td colspan="8">' . esc_html__('No traces found. Browse your site as an admin to generate traces.', 'wp-flame') . '</td></tr>';
         }
 
         foreach ($traces as $row) {
@@ -218,6 +219,12 @@ class Admin
 
             echo $is_slow ? '<tr class="wp-flame-slow">' : '<tr>';
             echo '<td><a href="' . esc_url($view_url) . '">' . esc_html($row['url']) . '</a></td>';
+            if ($row['score'] !== null) {
+                $badge_grade = Score::grade((int) $row['score']);
+                echo '<td><span class="wp-flame-score-badge" style="background:' . esc_attr($badge_grade['color']) . '">' . esc_html((string) $row['score']) . '</span></td>';
+            } else {
+                echo '<td>&mdash;</td>';
+            }
             echo '<td>' . esc_html($row['method']) . '</td>';
             echo '<td>' . esc_html(round((float) $row['total_ms'], 1)) . ' ms</td>';
             echo '<td>' . esc_html($row['query_count']) . '</td>';
@@ -255,6 +262,7 @@ class Admin
     {
         $stats        = $this->storage->get_aggregate_stats(7);
         $slowest_pages = $this->storage->get_slowest_pages(5, 7);
+        $avg_score    = $this->storage->get_avg_score(7);
 
         // Trend indicator
         $trend       = '—';
@@ -309,6 +317,16 @@ class Admin
         echo '<span class="wp-flame-stat-value">' . esc_html(round($stats['avg_queries'], 1)) . '</span>';
         echo '<span class="wp-flame-trend">' . esc_html__('per request', 'wp-flame') . '</span>';
         echo '</div>';
+
+        // AVG SCORE stat card
+        if ($avg_score !== null) {
+            $avg_grade = Score::grade((int) round($avg_score));
+            echo '<div class="wp-flame-stat wp-flame-score-card" style="border-left:4px solid ' . esc_attr($avg_grade['color']) . '">';
+            echo '<span class="wp-flame-stat-label">' . esc_html__('AVG SCORE', 'wp-flame') . '</span>';
+            echo '<span class="wp-flame-stat-value" style="color:' . esc_attr($avg_grade['color']) . '">' . esc_html((string) $avg_score) . '<small>' . esc_html($avg_grade['grade']) . '</small></span>';
+            echo '<span class="wp-flame-trend">' . esc_html__('last 7 days', 'wp-flame') . '</span>';
+            echo '</div>';
+        }
 
         echo '</div>'; // .wp-flame-summary
 
@@ -488,6 +506,8 @@ class Admin
             return;
         }
 
+        $score = Score::calculate($trace);
+
         echo '<div class="wrap">';
         echo '<h1>';
         echo '<a href="' . esc_url(admin_url('tools.php?page=wp-flame')) . '">&larr; ' . esc_html__('All Traces', 'wp-flame') . '</a>';
@@ -525,6 +545,12 @@ class Admin
             echo '</div>';
         }
 
+        // Score stat card
+        echo '<div class="wp-flame-stat wp-flame-score-card" style="border-left:4px solid ' . esc_attr($score['color']) . '">';
+        echo '<span class="wp-flame-stat-label">' . esc_html__('SCORE', 'wp-flame') . '</span>';
+        echo '<span class="wp-flame-stat-value">' . esc_html((string) $score['score']) . '<small>' . esc_html($score['grade']) . '</small></span>';
+        echo '</div>';
+
         echo '<div class="wp-flame-stat-right">';
         echo esc_html($trace->method) . ' ' . esc_html($trace->url) . ' &mdash; ' . esc_html(round($trace->total_ms)) . 'ms';
         echo '</div>';
@@ -544,6 +570,22 @@ class Admin
             echo '<span class="wp-flame-legend-color" style="background:' . esc_attr($item['color']) . '"></span>';
             echo esc_html($item['label']);
             echo '</span>';
+        }
+        echo '</div>';
+
+        // Score Breakdown section
+        echo '<div class="wp-flame-score-breakdown">';
+        echo '<h3>' . esc_html__('Score Breakdown', 'wp-flame') . '</h3>';
+        foreach ($score['factors'] as $factor) {
+            $factor_color = Score::grade((int) round($factor['score']))['color'];
+            echo '<div class="wp-flame-score-factor">';
+            echo '<span class="wp-flame-score-factor-label">' . esc_html($factor['label']) . '</span>';
+            echo '<span class="wp-flame-score-factor-value">' . esc_html($factor['value']) . '</span>';
+            echo '<div class="wp-flame-score-factor-bar">';
+            echo '<div class="wp-flame-score-factor-fill" style="width:' . esc_attr((string) $factor['score']) . '%;background:' . esc_attr($factor_color) . '"></div>';
+            echo '</div>';
+            echo '<span class="wp-flame-score-factor-score">' . esc_html((string) $factor['score']) . '/100 <span style="color:#c3c4c7">(' . esc_html((string) $factor['weight']) . '%)</span></span>';
+            echo '</div>';
         }
         echo '</div>';
 

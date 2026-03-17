@@ -323,3 +323,77 @@ a.wp-flame-histogram-row.wp-flame-histogram-active {
     color: #646970;
     flex-shrink: 0;
 }
+
+/* Score badge in trace list */
+.wp-flame-score-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 3px;
+    color: #fff;
+    font-weight: 600;
+    font-size: 12px;
+}
+
+/* Score breakdown */
+.wp-flame-score-breakdown {
+    background: #fff;
+    border: 1px solid #c3c4c7;
+    border-radius: 4px;
+    padding: 16px;
+    margin: 12px 0;
+}
+
+.wp-flame-score-breakdown h3 {
+    margin: 0 0 12px;
+    font-size: 13px;
+    text-transform: uppercase;
+    color: #646970;
+    letter-spacing: 0.5px;
+}
+
+.wp-flame-score-factor {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 0;
+    border-bottom: 1px solid #f0f0f0;
+}
+
+.wp-flame-score-factor:last-child {
+    border-bottom: none;
+}
+
+.wp-flame-score-factor-label {
+    width: 120px;
+    font-size: 13px;
+    flex-shrink: 0;
+}
+
+.wp-flame-score-factor-value {
+    width: 60px;
+    font-size: 12px;
+    color: #646970;
+    text-align: right;
+    flex-shrink: 0;
+}
+
+.wp-flame-score-factor-bar {
+    flex: 1;
+    height: 8px;
+    background: #f0f0f0;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.wp-flame-score-factor-fill {
+    height: 100%;
+    border-radius: 4px;
+    transition: width 0.3s;
+}
+
+.wp-flame-score-factor-score {
+    width: 50px;
+    font-size: 12px;
+    color: #646970;
+    flex-shrink: 0;
+}
