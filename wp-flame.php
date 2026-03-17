@@ -299,8 +299,8 @@ function wp_flame_shutdown(): void {
     // Object cache stats
     if ( isset( $GLOBALS['wp_object_cache'] ) ) {
         $cache = $GLOBALS['wp_object_cache'];
-        $request_meta['cache_hits']    = (int) ( $cache->cache_hits ?? 0 );
-        $request_meta['cache_misses']  = (int) ( $cache->cache_misses ?? 0 );
+        $request_meta['cache_hits']    = property_exists( $cache, 'cache_hits' ) ? (int) $cache->cache_hits : 0;
+        $request_meta['cache_misses']  = property_exists( $cache, 'cache_misses' ) ? (int) $cache->cache_misses : 0;
         $request_meta['cache_backend'] = get_class( $cache );
     }
 

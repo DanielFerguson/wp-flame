@@ -1,7 +1,7 @@
 /**
  * WP Flame — SVG Flame Graph Renderer
  *
- * Reads window.wpFlameTrace (set by wp_localize_script) and renders
+ * Reads window.wpFlameTrace (set by wp_add_inline_script) and renders
  * an interactive SVG flame graph.
  */
 (function () {

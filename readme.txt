@@ -32,6 +32,10 @@ WP Flame is a self-hosted, zero-dependency APM (Application Performance Monitori
 * Settings page with sampling rate, audience control, and data retention
 * "Trace This Page" admin bar button for on-demand single-page tracing
 * Trace list with URL filtering, duration filtering, and pagination
+* Dashboard with aggregate stats, slowest pages, slowest callbacks, and response time histogram
+* Performance budgets — admin notice when requests exceed configured ms/query thresholds
+* WP-CLI commands: `wp flame list`, `wp flame stats`, `wp flame purge`
+* Object cache hit/miss stats per trace (compatible with Redis, Memcached, and default WP cache)
 
 **How it works:**
 
@@ -87,7 +91,7 @@ Those require SaaS subscriptions and PHP extensions. WP Flame is free, self-host
 == Changelog ==
 
 = 0.1.0 =
-* Initial release
+* Initial release (Phase 1)
 * Lifecycle phase instrumentation (Bootstrap through Render)
 * Per-callback timing via hook callback wrapping
 * Database query instrumentation with source attribution
@@ -98,6 +102,25 @@ Those require SaaS subscriptions and PHP extensions. WP Flame is free, self-host
 * Settings page with sampling, audience, and retention controls
 * "Trace This Page" admin bar button
 * mu-plugin for early loading with graceful degraded mode
+
+= Phase 2 =
+* Dashboard with aggregate stats cards (avg load time, trace count, slowest page, avg queries)
+* Time Breakdown Bar showing Core / Plugin / Theme / DB / HTTP split across recent traces
+* Slowest Pages and Slowest Callbacks ranking tables
+* Response Time Distribution histogram with click-to-filter integration
+* Trend indicator comparing current period vs previous period avg load time
+* Object cache hit/miss/ratio stats per trace displayed on the flame graph view
+* Performance budget thresholds (max ms, max queries) with admin-notice violations counter
+
+= Phase 3 =
+* WP-CLI commands: `wp flame list`, `wp flame stats`, `wp flame purge`
+* Sortable trace list columns (Duration, Queries, Memory, Date)
+* Request type filter tabs (All, Cron, AJAX, REST API)
+* HTTP method filter dropdown
+* Pagination for trace list
+* Guard against division-by-zero in trend calculation when prev_avg_ms is zero
+* Replace NOW() with UTC_TIMESTAMP() in SQL queries to match UTC storage
+* Use wp_add_inline_script instead of wp_localize_script to preserve numeric types
 
 == Upgrade Notice ==
 

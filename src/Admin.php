@@ -125,7 +125,7 @@ class Admin
             echo '<div class="notice notice-success is-dismissible"><p>' . esc_html__('Trace deleted.', 'wp-flame') . '</p></div>';
         }
 
-        $this->render_dashboard();
+        $this->render_dashboard($filters);
 
         // Active duration filter indicator
         if (isset($filters['min_duration']) && isset($filters['max_duration'])) {
@@ -251,7 +251,7 @@ class Admin
         echo '</div>';
     }
 
-    private function render_dashboard(): void
+    private function render_dashboard(array $filters): void
     {
         $stats        = $this->storage->get_aggregate_stats(7);
         $slowest_pages = $this->storage->get_slowest_pages(5, 7);
@@ -259,7 +259,7 @@ class Admin
         // Trend indicator
         $trend       = '—';
         $trend_class = '';
-        if ($stats['prev_avg_ms'] !== null) {
+        if ($stats['prev_avg_ms'] !== null && $stats['prev_avg_ms'] > 0) {
             $change = (($stats['avg_ms'] - $stats['prev_avg_ms']) / $stats['prev_avg_ms']) * 100;
             if ($change > 10) {
                 $trend       = sprintf('↑ %d%%', round(abs($change)));
@@ -312,15 +312,20 @@ class Admin
 
         echo '</div>'; // .wp-flame-summary
 
-        // Chart 2: Time Breakdown Bar
-        $trace_data_blobs = $this->storage->get_recent_trace_data(50);
-        $type_totals      = ['core' => 0.0, 'plugin' => 0.0, 'theme' => 0.0, 'db' => 0.0, 'http' => 0.0];
-
+        // Fetch and decode trace data once; reuse for breakdown bar and slowest callbacks.
+        $trace_data_blobs   = $this->storage->get_recent_trace_data(50);
+        $decoded_traces     = [];
         foreach ($trace_data_blobs as $blob) {
             $data = json_decode($blob, true);
-            if (! is_array($data) || empty($data['spans'])) {
-                continue;
+            if (is_array($data) && ! empty($data['spans'])) {
+                $decoded_traces[] = $data;
             }
+        }
+
+        // Chart 2: Time Breakdown Bar
+        $type_totals = ['core' => 0.0, 'plugin' => 0.0, 'theme' => 0.0, 'db' => 0.0, 'http' => 0.0];
+
+        foreach ($decoded_traces as $data) {
             foreach ($data['spans'] as $span) {
                 $type = $span['type'] ?? '';
                 if (array_key_exists($type, $type_totals)) {
@@ -367,8 +372,8 @@ class Admin
         echo '</div>';
         echo '</div>'; // .wp-flame-breakdown
 
-        // Slowest callbacks ranking
-        $slowest_callbacks = $this->get_slowest_callbacks(5);
+        // Slowest callbacks ranking (reuse already-decoded traces)
+        $slowest_callbacks = $this->get_slowest_callbacks(5, $decoded_traces);
 
         // Rankings tables
         echo '<div class="wp-flame-rankings">';
@@ -443,21 +448,16 @@ class Admin
     }
 
     /**
-     * Build a top-N callback ranking by summing duration_ms across recent traces.
+     * Build a top-N callback ranking by summing duration_ms across pre-decoded traces.
      *
+     * @param array<int, array<string, mixed>> $decoded_traces Already-decoded trace data arrays.
      * @return array<string, float>
      */
-    private function get_slowest_callbacks(int $limit = 5): array
+    private function get_slowest_callbacks(int $limit = 5, array $decoded_traces = []): array
     {
-        $trace_data_blobs = $this->storage->get_recent_trace_data(50);
-        $totals           = [];
+        $totals = [];
 
-        foreach ($trace_data_blobs as $blob) {
-            $data = json_decode($blob, true);
-            if (! is_array($data) || empty($data['spans'])) {
-                continue;
-            }
-
+        foreach ($decoded_traces as $data) {
             foreach ($data['spans'] as $span) {
                 // Only callback spans (those with a meta.hook key)
                 if (empty($span['meta']['hook'])) {

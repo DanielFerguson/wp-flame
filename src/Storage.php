@@ -199,7 +199,7 @@ class Storage
     {
         $this->wpdb->query(
             $this->wpdb->prepare(
-                "DELETE FROM {$this->table} WHERE created_at < DATE_SUB(NOW(), INTERVAL %d DAY)",
+                "DELETE FROM {$this->table} WHERE created_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL %d DAY)",
                 $days
             )
         );
@@ -218,13 +218,13 @@ class Storage
     {
         $current = $this->wpdb->get_row($this->wpdb->prepare(
             "SELECT AVG(total_ms) as avg_ms, COUNT(*) as count, AVG(query_count) as avg_queries
-             FROM `{$this->table}` WHERE created_at >= DATE_SUB(NOW(), INTERVAL %d DAY)",
+             FROM `{$this->table}` WHERE created_at >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL %d DAY)",
             $days
         ));
 
         $prev = $this->wpdb->get_row($this->wpdb->prepare(
             "SELECT AVG(total_ms) as avg_ms
-             FROM `{$this->table}` WHERE created_at >= DATE_SUB(NOW(), INTERVAL %d DAY) AND created_at < DATE_SUB(NOW(), INTERVAL %d DAY)",
+             FROM `{$this->table}` WHERE created_at >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL %d DAY) AND created_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL %d DAY)",
             $days * 2, $days
         ));
 
@@ -244,7 +244,7 @@ class Storage
         // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name is safe
         $results = $this->wpdb->get_results($this->wpdb->prepare(
             "SELECT SUBSTRING_INDEX(url, '?', 1) as page_url, AVG(total_ms) as avg_ms, COUNT(*) as hits
-             FROM `{$this->table}` WHERE created_at >= DATE_SUB(NOW(), INTERVAL %d DAY)
+             FROM `{$this->table}` WHERE created_at >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL %d DAY)
              GROUP BY page_url ORDER BY avg_ms DESC LIMIT %d",
             $days, $limit
         ), ARRAY_A);
@@ -283,7 +283,7 @@ class Storage
         foreach ($buckets as $bucket) {
             // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
             $count = (int) $this->wpdb->get_var($this->wpdb->prepare(
-                "SELECT COUNT(*) FROM `{$this->table}` WHERE created_at >= DATE_SUB(NOW(), INTERVAL %d DAY) AND total_ms >= %f AND total_ms < %f",
+                "SELECT COUNT(*) FROM `{$this->table}` WHERE created_at >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL %d DAY) AND total_ms >= %f AND total_ms < %f",
                 $days, $bucket['min'], $bucket['max']
             ));
             $result[] = ['label' => $bucket['label'], 'count' => $count, 'min' => $bucket['min'], 'max' => $bucket['max']];
