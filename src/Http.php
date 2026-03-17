@@ -21,6 +21,7 @@ class Http
 
         add_filter('pre_http_request', [$this, 'on_pre_request'], 1, 3);
         add_filter('http_response', [$this, 'on_response'], 9999, 3);
+        add_action( 'http_api_debug', [ $this, 'on_http_debug' ], 9999, 5 );
     }
 
     /**
@@ -89,6 +90,44 @@ class Http
         $this->collector->end_span($span_id);
 
         return $response;
+    }
+
+    /**
+     * Fallback cleanup for HTTP requests where http_response did not fire
+     * (WP_Error responses — timeouts, DNS failures, etc.).
+     *
+     * @param mixed  $response    Response or WP_Error.
+     * @param string $context     'response' for WP_Http requests.
+     * @param string $class       HTTP transport class name.
+     * @param array  $parsed_args Request arguments.
+     * @param string $url         Request URL.
+     * @return void
+     */
+    public function on_http_debug( $response, $context, $class, $parsed_args, $url ): void
+    {
+        $key = md5( $url . ( $parsed_args['method'] ?? 'GET' ) );
+
+        if ( ! isset( $this->pending_spans[ $key ] ) ) {
+            return; // Already handled by on_response().
+        }
+
+        $span_id = $this->pending_spans[ $key ];
+        unset( $this->pending_spans[ $key ] );
+
+        $meta = [
+            'url'    => $url,
+            'method' => $parsed_args['method'] ?? 'GET',
+        ];
+
+        if ( is_wp_error( $response ) ) {
+            $meta['status']     = 0;
+            $meta['http_error'] = $response->get_error_message();
+        } else {
+            $meta['status'] = (int) wp_remote_retrieve_response_code( $response );
+        }
+
+        $this->collector->add_span_meta( $span_id, $meta );
+        $this->collector->end_span( $span_id );
     }
 
     /**
