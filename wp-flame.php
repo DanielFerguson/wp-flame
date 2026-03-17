@@ -71,6 +71,7 @@ function wp_flame_activate(): void {
     add_option( 'wp_flame_min_callback_ms', 0.5 );
     add_option( 'wp_flame_budget_max_ms', 500 );
     add_option( 'wp_flame_budget_max_queries', 100 );
+    add_option( 'wp_flame_track_ips', true );
 }
 
 function wp_flame_deactivate(): void {
@@ -85,6 +86,22 @@ function wp_flame_deactivate(): void {
     if ( $timestamp ) {
         wp_unschedule_event( $timestamp, 'wp_flame_prune_traces' );
     }
+}
+
+function wp_flame_get_client_ip(): string {
+    $headers = ['HTTP_CF_CONNECTING_IP', 'HTTP_X_FORWARDED_FOR', 'HTTP_X_REAL_IP', 'REMOTE_ADDR'];
+    foreach ($headers as $header) {
+        if (!empty($_SERVER[$header])) {
+            $ip = sanitize_text_field(wp_unslash($_SERVER[$header]));
+            if (strpos($ip, ',') !== false) {
+                $ip = trim(explode(',', $ip)[0]);
+            }
+            if (filter_var($ip, FILTER_VALIDATE_IP)) {
+                return $ip;
+            }
+        }
+    }
+    return '';
 }
 
 // --- Main plugin initialization ---
@@ -305,6 +322,16 @@ function wp_flame_shutdown(): void {
         $request_meta['cache_backend'] = get_class( $cache );
     }
 
+    // User identity
+    $request_meta['user_id'] = function_exists( 'get_current_user_id' ) ? get_current_user_id() : 0;
+    $request_meta['user_agent'] = isset( $_SERVER['HTTP_USER_AGENT'] )
+        ? substr( sanitize_text_field( wp_unslash( $_SERVER['HTTP_USER_AGENT'] ) ), 0, 500 )
+        : '';
+
+    // IP address (if tracking enabled)
+    $track_ips = get_option( 'wp_flame_track_ips', true );
+    $request_meta['ip_address'] = $track_ips ? wp_flame_get_client_ip() : '';
+
     // Step 4: Build trace
     $trace = $collector->get_trace( $request_meta );
 
@@ -322,7 +349,12 @@ function wp_flame_shutdown(): void {
     // Step 6: Save trace
     global $wpdb;
     $storage = new WPFlame\Storage( $wpdb );
-    $storage->save_trace( $trace, $score_result['score'] );
+    $storage->save_trace(
+        $trace,
+        $score_result['score'],
+        (int) ( $request_meta['user_id'] ?? 0 ),
+        (string) ( $request_meta['ip_address'] ?? '' )
+    );
 
     // Step 7: Check performance budget thresholds
     $budget_max_ms      = (int) get_option( 'wp_flame_budget_max_ms', 500 );
