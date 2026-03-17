@@ -63,6 +63,8 @@ function wp_flame_activate(): void {
 
     // Set default options (add_option won't overwrite existing values)
     add_option( 'wp_flame_enabled', true );
+    add_option( 'wp_flame_trace_audience', 'admins' );
+    add_option( 'wp_flame_sample_rate', 1 );
     add_option( 'wp_flame_retention_days', 7 );
     add_option( 'wp_flame_full_query_text', false );
     add_option( 'wp_flame_min_callback_ms', 0.5 );
@@ -159,10 +161,46 @@ function wp_flame_init(): void {
 
     // Register admin UI
     if ( is_admin() ) {
-        global $wpdb;
         $admin = new WPFlame\Admin( new WPFlame\Storage( $wpdb ) );
         $admin->register();
     }
+
+    // Register settings page
+    $settings = new WPFlame\Settings( new WPFlame\Storage( $wpdb ) );
+    $settings->register();
+
+    // Admin bar button — only on frontend pages for users with manage_options
+    add_action( 'admin_bar_menu', function ( $wp_admin_bar ) {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            return;
+        }
+        if ( is_admin() ) {
+            return; // Only show on frontend
+        }
+        $wp_admin_bar->add_node( [
+            'id'    => 'wp-flame-trace',
+            'title' => '🔥 Trace This Page',
+            'href'  => '#',
+            'meta'  => [
+                'onclick' => "document.cookie='wp_flame_force_trace=1;path=/';location.reload();return false;",
+            ],
+        ] );
+    }, 999 );
+
+    // Admin notice for force-traced pages
+    add_action( 'admin_notices', function () {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            return;
+        }
+        $trace_id = get_transient( 'wp_flame_last_force_trace_' . get_current_user_id() );
+        if ( $trace_id ) {
+            delete_transient( 'wp_flame_last_force_trace_' . get_current_user_id() );
+            $url = admin_url( 'tools.php?page=wp-flame&trace_id=' . urlencode( $trace_id ) );
+            echo '<div class="notice notice-success is-dismissible"><p>';
+            echo '<strong>WP Flame:</strong> Trace captured! <a href="' . esc_url( $url ) . '">View flame graph &rarr;</a>';
+            echo '</p></div>';
+        }
+    } );
 
     // Per-callback instrumentation (Phase 2)
     $min_callback_ms = (float) get_option( 'wp_flame_min_callback_ms', 0.5 );
@@ -193,16 +231,37 @@ function wp_flame_shutdown(): void {
     // Step 2: Safety net — close any remaining open spans
     $collector->close_open_spans();
 
-    // Step 3: Check if we should save
-    if ( ! get_option( 'wp_flame_enabled', true ) ) {
-        return;
+    // Force-trace via admin bar button (cookie)
+    $force_trace = false;
+    if ( ! empty( $_COOKIE['wp_flame_force_trace'] ) ) {
+        $force_trace = true;
+        setcookie( 'wp_flame_force_trace', '', time() - 3600, '/' );
     }
-    if ( empty( $GLOBALS['wp_flame_is_admin_request'] ) ) {
-        return;
+
+    if ( ! $force_trace ) {
+        // Audience check
+        $audience = get_option( 'wp_flame_trace_audience', 'admins' );
+        if ( $audience === 'admins' && empty( $GLOBALS['wp_flame_is_admin_request'] ) ) {
+            return;
+        } elseif ( $audience === 'logged_in' && ! is_user_logged_in() ) {
+            return;
+        }
+        // 'everyone' always passes
+
+        // Sampling check
+        $sample_rate = max( 1, (int) get_option( 'wp_flame_sample_rate', 1 ) );
+        if ( $sample_rate > 1 && rand( 1, $sample_rate ) !== 1 ) {
+            return;
+        }
     }
 
     // Step 4: Build trace
     $trace = $collector->get_trace();
+
+    // If force-trace, store the trace ID for admin notice
+    if ( $force_trace && function_exists( 'set_transient' ) ) {
+        set_transient( 'wp_flame_last_force_trace_' . get_current_user_id(), $trace->id, 60 );
+    }
 
     // Step 5: Stop collector (prevents self-instrumentation during save)
     $collector->stop();
@@ -235,24 +294,8 @@ function wp_flame_wrap_callbacks( WPFlame\Collector $collector, float $min_ms ):
 
                 // Skip our own plugin's callbacks to avoid self-instrumentation
                 $source = WPFlame\CallbackResolver::resolve_source( $id, $original, $collector );
-                if ( defined( 'WP_FLAME_DIR' ) ) {
-                    try {
-                        $filename = '';
-                        if ( is_string( $original ) && function_exists( $original ) ) {
-                            $filename = ( new \ReflectionFunction( $original ) )->getFileName();
-                        } elseif ( is_array( $original ) && isset( $original[0], $original[1] ) ) {
-                            $filename = ( new \ReflectionMethod( $original[0], $original[1] ) )->getFileName();
-                        } elseif ( $original instanceof \Closure ) {
-                            $filename = ( new \ReflectionFunction( $original ) )->getFileName();
-                        } elseif ( is_object( $original ) && method_exists( $original, '__invoke' ) ) {
-                            $filename = ( new \ReflectionMethod( $original, '__invoke' ) )->getFileName();
-                        }
-                        if ( $filename && strpos( $filename, WP_FLAME_DIR ) === 0 ) {
-                            continue;
-                        }
-                    } catch ( \ReflectionException $e ) {
-                        // Can't determine file — wrap it anyway
-                    }
+                if ( $source['source'] === 'wp-flame' || $source['source'] === 'wordpress-apm-plugin' ) {
+                    continue;
                 }
 
                 $name = WPFlame\CallbackResolver::resolve_name( $id, $original );

@@ -176,4 +176,23 @@ class Storage
             )
         );
     }
+
+    public function purge_all(): int
+    {
+        return (int) $this->wpdb->query("DELETE FROM {$this->table}");
+    }
+
+    /**
+     * @return array{count: int, bytes: int}
+     */
+    public function get_stats(): array
+    {
+        $row = $this->wpdb->get_row(
+            "SELECT COUNT(*) as count, COALESCE(SUM(LENGTH(trace_data)), 0) as bytes FROM {$this->table}"
+        );
+        return [
+            'count' => (int) ($row->count ?? 0),
+            'bytes' => (int) ($row->bytes ?? 0),
+        ];
+    }
 }
