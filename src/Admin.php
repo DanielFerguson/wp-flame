@@ -82,6 +82,9 @@ class Admin
         if (! empty($_GET['min_duration'])) {
             $filters['min_duration'] = (float) wp_unslash($_GET['min_duration']);
         }
+        if (isset($_GET['max_duration']) && $_GET['max_duration'] !== '') {
+            $filters['max_duration'] = (float) wp_unslash($_GET['max_duration']);
+        }
 
         $paged    = max(1, (int) wp_unslash($_GET['paged'] ?? 1));
         $per_page = 20;
@@ -104,6 +107,30 @@ class Admin
         }
 
         $this->render_dashboard();
+
+        // Active duration filter indicator
+        if (isset($filters['min_duration']) && isset($filters['max_duration'])) {
+            $clear_url = admin_url('tools.php?page=wp-flame');
+            echo '<div class="notice notice-info inline" style="margin:8px 0"><p>';
+            /* translators: %1$s: min duration, %2$s: max duration */
+            echo wp_kses_post(sprintf(
+                __('Showing traces between <strong>%1$sms</strong> and <strong>%2$sms</strong>.', 'wp-flame'),
+                esc_html(round((float) $filters['min_duration'])),
+                esc_html(round((float) $filters['max_duration']))
+            ));
+            echo ' <a href="' . esc_url($clear_url) . '">' . esc_html__('Clear filter', 'wp-flame') . '</a>';
+            echo '</p></div>';
+        } elseif (isset($filters['min_duration']) && !isset($filters['max_duration'])) {
+            $clear_url = admin_url('tools.php?page=wp-flame');
+            echo '<div class="notice notice-info inline" style="margin:8px 0"><p>';
+            /* translators: %s: min duration */
+            echo wp_kses_post(sprintf(
+                __('Showing traces slower than <strong>%sms</strong>.', 'wp-flame'),
+                esc_html(round((float) $filters['min_duration']))
+            ));
+            echo ' <a href="' . esc_url($clear_url) . '">' . esc_html__('Clear filter', 'wp-flame') . '</a>';
+            echo '</p></div>';
+        }
 
         // Search/filter form
         echo '<form method="get">';
@@ -338,13 +365,23 @@ class Admin
         echo '<div class="wp-flame-histogram">';
         foreach ($distribution as $bucket) {
             $pct = ($bucket['count'] / $max_count) * 100;
-            echo '<div class="wp-flame-histogram-row">';
+            $filter_url = add_query_arg([
+                'page'         => 'wp-flame',
+                'min_duration' => $bucket['min'],
+                'max_duration' => $bucket['max'] < 999999 ? $bucket['max'] : '',
+            ], admin_url('tools.php'));
+            $is_active = isset($filters['min_duration'])
+                && (float) $filters['min_duration'] === (float) $bucket['min']
+                && isset($filters['max_duration'])
+                && (float) $filters['max_duration'] === (float) $bucket['max'];
+            $row_class = 'wp-flame-histogram-row' . ($is_active ? ' wp-flame-histogram-active' : '');
+            echo '<a href="' . esc_url($filter_url) . '" class="' . esc_attr($row_class) . '">';
             echo '<span class="wp-flame-histogram-label">' . esc_html($bucket['label']) . '</span>';
             echo '<div class="wp-flame-histogram-bar-container">';
             echo '<div class="wp-flame-histogram-bar" style="width:' . esc_attr(round($pct, 1)) . '%"></div>';
             echo '</div>';
             echo '<span class="wp-flame-histogram-count">' . esc_html($bucket['count']) . '</span>';
-            echo '</div>';
+            echo '</a>';
         }
         echo '</div>';
         echo '</div>'; // .wp-flame-ranking

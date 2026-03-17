@@ -99,6 +99,11 @@ class Storage
             $params[] = (float) $filters['min_duration'];
         }
 
+        if (isset($filters['max_duration'])) {
+            $where  .= ' AND total_ms < %f';
+            $params[] = (float) $filters['max_duration'];
+        }
+
         if (! empty($filters['after'])) {
             $where  .= ' AND created_at >= %s';
             $params[] = $filters['after'];
@@ -141,6 +146,11 @@ class Storage
         if (isset($filters['min_duration'])) {
             $where  .= ' AND total_ms >= %f';
             $params[] = (float) $filters['min_duration'];
+        }
+
+        if (isset($filters['max_duration'])) {
+            $where  .= ' AND total_ms < %f';
+            $params[] = (float) $filters['max_duration'];
         }
 
         if (! empty($filters['after'])) {
@@ -262,7 +272,7 @@ class Storage
                 "SELECT COUNT(*) FROM `{$this->table}` WHERE created_at >= DATE_SUB(NOW(), INTERVAL %d DAY) AND total_ms >= %f AND total_ms < %f",
                 $days, $bucket['min'], $bucket['max']
             ));
-            $result[] = ['label' => $bucket['label'], 'count' => $count];
+            $result[] = ['label' => $bucket['label'], 'count' => $count, 'min' => $bucket['min'], 'max' => $bucket['max']];
         }
 
         return $result;

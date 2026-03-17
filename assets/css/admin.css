@@ -272,11 +272,24 @@
     justify-content: space-between;
 }
 
-.wp-flame-histogram-row {
+a.wp-flame-histogram-row {
     display: flex;
     align-items: center;
     gap: 8px;
     flex: 1;
+    text-decoration: none;
+    padding: 2px 4px;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+a.wp-flame-histogram-row:hover {
+    background: #f0f0f5;
+}
+
+a.wp-flame-histogram-row.wp-flame-histogram-active {
+    background: #f0ecfc;
 }
 
 .wp-flame-histogram-label {
