@@ -8,19 +8,25 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-class Http
+class Http implements Instrumentor
 {
-    private Collector $collector;
+    /** @var Collector */
+    private $collector;
 
     /** @var array<string, string> Maps request key (md5 of url+method) → span ID */
     private array $pending_spans = [];
 
-    public function __construct(Collector $collector)
+    public function is_applicable(): bool
+    {
+        return true;
+    }
+
+    public function register( Collector $collector ): void
     {
         $this->collector = $collector;
 
-        add_filter('pre_http_request', [$this, 'on_pre_request'], 1, 3);
-        add_filter('http_response', [$this, 'on_response'], 9999, 3);
+        add_filter( 'pre_http_request', [ $this, 'on_pre_request' ], 1, 3 );
+        add_filter( 'http_response', [ $this, 'on_response' ], 9999, 3 );
         add_action( 'http_api_debug', [ $this, 'on_http_debug' ], 9999, 5 );
     }
 

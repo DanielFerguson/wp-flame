@@ -8,12 +8,16 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-class GraphQL
+class GraphQL implements Instrumentor
 {
     private const ROOT_TYPES = ['rootquery', 'rootmutation', 'rootsubscription'];
 
-    private Collector $collector;
-    private bool $full_query_text;
+    /** @var Collector */
+    private $collector;
+    /** @var bool */
+    private $full_query_text;
+    /** @var \wpdb|null */
+    private $wpdb;
 
     /** @var array<string, string[]> Stack of span IDs per field key for alias handling */
     private array $resolver_span_stacks = [];
@@ -23,11 +27,39 @@ class GraphQL
     /** @var callable|null Stored for remove_filter() in deactivate() */
     private $db_hook_callback = null;
 
-    public function __construct( Collector $collector, bool $full_query_text = false )
+    public function __construct( bool $full_query_text = false, ?\wpdb $wpdb = null )
+    {
+        $this->full_query_text = $full_query_text;
+        $this->wpdb            = $wpdb;
+    }
+
+    public function is_applicable(): bool
+    {
+        $uri = isset( $_SERVER['REQUEST_URI'] )
+            ? rtrim( parse_url( wp_unslash( $_SERVER['REQUEST_URI'] ), PHP_URL_PATH ) ?: '', '/' )
+            : '';
+        return self::is_graphql_endpoint(
+            $uri,
+            apply_filters( 'graphql_endpoint', 'graphql' )
+        );
+    }
+
+    public function register( Collector $collector ): void
     {
         $this->collector = $collector;
-        $this->full_query_text = $full_query_text;
         $this->register_db_hooks();
+
+        add_action( 'init', function () use ( $collector ) {
+            if ( defined( 'GRAPHQL_REQUEST' ) && GRAPHQL_REQUEST ) {
+                $this->activate_wpgraphql_hooks();
+            } else {
+                $this->deactivate();
+                if ( $this->wpdb && DB::can_replace( $this->wpdb ) ) {
+                    $GLOBALS['wpdb'] = DB::from_wpdb( $this->wpdb, $collector, $this->full_query_text );
+                }
+                $GLOBALS['wp_flame_skip_callback_wrapping'] = false;
+            }
+        }, 0 );
     }
 
     /**

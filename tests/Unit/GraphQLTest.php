@@ -75,10 +75,11 @@ namespace WPFlame\Tests\Unit {
             return $collector;
         }
 
-        public function test_constructor_registers_log_query_custom_data_hook(): void
+        public function test_register_registers_log_query_custom_data_hook(): void
         {
             $collector = $this->make_collector();
-            new GraphQL($collector);
+            $gql = new GraphQL();
+            $gql->register($collector);
 
             $this->assertArrayHasKey('log_query_custom_data', $GLOBALS['wp_flame_test_filters']);
             $this->assertCount(1, $GLOBALS['wp_flame_test_filters']['log_query_custom_data']);
@@ -87,7 +88,8 @@ namespace WPFlame\Tests\Unit {
         public function test_deactivate_removes_log_query_custom_data_hook(): void
         {
             $collector = $this->make_collector();
-            $gql = new GraphQL($collector);
+            $gql = new GraphQL();
+            $gql->register($collector);
 
             $this->assertNotEmpty($GLOBALS['wp_flame_test_filters']['log_query_custom_data']);
 
@@ -100,7 +102,8 @@ namespace WPFlame\Tests\Unit {
         public function test_deactivate_twice_is_safe(): void
         {
             $collector = $this->make_collector();
-            $gql = new GraphQL($collector);
+            $gql = new GraphQL();
+            $gql->register($collector);
 
             $gql->deactivate();
             $gql->deactivate(); // Should not throw
@@ -111,7 +114,8 @@ namespace WPFlame\Tests\Unit {
         public function test_db_hook_creates_span_with_correct_timing(): void
         {
             $collector = $this->make_collector();
-            $gql = new GraphQL($collector);
+            $gql = new GraphQL();
+            $gql->register($collector);
 
             $filters = $GLOBALS['wp_flame_test_filters']['log_query_custom_data'] ?? [];
             $this->assertNotEmpty($filters);
@@ -142,7 +146,8 @@ namespace WPFlame\Tests\Unit {
             $GLOBALS['wp_flame_test_options']['wp_flame_full_query_text'] = false;
 
             $collector = $this->make_collector();
-            $gql = new GraphQL($collector);
+            $gql = new GraphQL();
+            $gql->register($collector);
 
             $callback = $GLOBALS['wp_flame_test_filters']['log_query_custom_data'][0]['callback'];
 
@@ -156,7 +161,8 @@ namespace WPFlame\Tests\Unit {
         public function test_db_hook_keeps_full_query_when_setting_enabled(): void
         {
             $collector = $this->make_collector();
-            $gql = new GraphQL($collector, true);
+            $gql = new GraphQL(true);
+            $gql->register($collector);
 
             $callback = $GLOBALS['wp_flame_test_filters']['log_query_custom_data'][0]['callback'];
 
@@ -170,7 +176,8 @@ namespace WPFlame\Tests\Unit {
         public function test_no_db_spans_after_deactivation(): void
         {
             $collector = $this->make_collector();
-            $gql = new GraphQL($collector);
+            $gql = new GraphQL();
+            $gql->register($collector);
 
             $callback = $GLOBALS['wp_flame_test_filters']['log_query_custom_data'][0]['callback'];
 
@@ -191,17 +198,19 @@ namespace WPFlame\Tests\Unit {
         public function test_activate_wpgraphql_hooks_registers_operation_hooks(): void
         {
             $collector = $this->make_collector();
-            $gql = new GraphQL($collector);
+            $gql = new GraphQL();
+            $gql->register($collector);
             $gql->activate_wpgraphql_hooks();
 
             $this->assertArrayHasKey('graphql_process_request', $GLOBALS['wp_flame_test_filters']);
             $this->assertArrayHasKey('graphql_return_response', $GLOBALS['wp_flame_test_filters']);
         }
 
-        public function test_constructor_does_not_register_operation_hooks(): void
+        public function test_register_does_not_register_operation_hooks(): void
         {
             $collector = $this->make_collector();
-            new GraphQL($collector);
+            $gql = new GraphQL();
+            $gql->register($collector);
 
             $this->assertArrayNotHasKey('graphql_process_request', $GLOBALS['wp_flame_test_filters']);
             $this->assertArrayNotHasKey('graphql_return_response', $GLOBALS['wp_flame_test_filters']);
@@ -210,7 +219,8 @@ namespace WPFlame\Tests\Unit {
         public function test_operation_span_created_and_closed(): void
         {
             $collector = $this->make_collector();
-            $gql = new GraphQL($collector);
+            $gql = new GraphQL();
+            $gql->register($collector);
             $gql->activate_wpgraphql_hooks();
 
             // Simulate graphql_process_request
@@ -241,7 +251,8 @@ namespace WPFlame\Tests\Unit {
         public function test_graphql_return_response_returns_response_without_operation_span(): void
         {
             $collector = $this->make_collector();
-            $gql = new GraphQL($collector);
+            $gql = new GraphQL();
+            $gql->register($collector);
             $gql->activate_wpgraphql_hooks();
 
             // Call graphql_return_response without prior graphql_process_request
@@ -257,7 +268,8 @@ namespace WPFlame\Tests\Unit {
         public function test_anonymous_operation_name(): void
         {
             $collector = $this->make_collector();
-            $gql = new GraphQL($collector);
+            $gql = new GraphQL();
+            $gql->register($collector);
             $gql->activate_wpgraphql_hooks();
 
             $wp_graphql = new class {
@@ -278,7 +290,8 @@ namespace WPFlame\Tests\Unit {
         public function test_activate_wpgraphql_hooks_registers_resolver_hooks(): void
         {
             $collector = $this->make_collector();
-            $gql = new GraphQL($collector);
+            $gql = new GraphQL();
+            $gql->register($collector);
             $gql->activate_wpgraphql_hooks();
 
             $this->assertArrayHasKey('graphql_pre_resolve_field', $GLOBALS['wp_flame_test_filters']);
@@ -288,7 +301,8 @@ namespace WPFlame\Tests\Unit {
         public function test_root_field_creates_resolver_span(): void
         {
             $collector = $this->make_collector();
-            $gql = new GraphQL($collector);
+            $gql = new GraphQL();
+            $gql->register($collector);
             $gql->activate_wpgraphql_hooks();
 
             $pre_resolve = $GLOBALS['wp_flame_test_filters']['graphql_pre_resolve_field'][0]['callback'];
@@ -318,7 +332,8 @@ namespace WPFlame\Tests\Unit {
         public function test_non_root_field_does_not_create_span(): void
         {
             $collector = $this->make_collector();
-            $gql = new GraphQL($collector);
+            $gql = new GraphQL();
+            $gql->register($collector);
             $gql->activate_wpgraphql_hooks();
 
             $pre_resolve = $GLOBALS['wp_flame_test_filters']['graphql_pre_resolve_field'][0]['callback'];
@@ -334,7 +349,8 @@ namespace WPFlame\Tests\Unit {
         public function test_aliased_root_fields_resolve_correctly_via_stack(): void
         {
             $collector = $this->make_collector();
-            $gql = new GraphQL($collector);
+            $gql = new GraphQL();
+            $gql->register($collector);
             $gql->activate_wpgraphql_hooks();
 
             $pre_resolve = $GLOBALS['wp_flame_test_filters']['graphql_pre_resolve_field'][0]['callback'];
@@ -356,7 +372,8 @@ namespace WPFlame\Tests\Unit {
         public function test_root_mutation_creates_span(): void
         {
             $collector = $this->make_collector();
-            $gql = new GraphQL($collector);
+            $gql = new GraphQL();
+            $gql->register($collector);
             $gql->activate_wpgraphql_hooks();
 
             $pre_resolve = $GLOBALS['wp_flame_test_filters']['graphql_pre_resolve_field'][0]['callback'];
@@ -414,7 +431,8 @@ namespace WPFlame\Tests\Unit {
         public function test_tier2_mode_has_db_hooks_but_no_resolver_hooks(): void
         {
             $collector = $this->make_collector();
-            $gql = new GraphQL($collector);
+            $gql = new GraphQL();
+            $gql->register($collector);
 
             // DB hooks are active
             $this->assertArrayHasKey('log_query_custom_data', $GLOBALS['wp_flame_test_filters']);
@@ -433,7 +451,8 @@ namespace WPFlame\Tests\Unit {
         public function test_db_span_parent_is_resolver_span_when_on_stack(): void
         {
             $collector = $this->make_collector();
-            $gql = new GraphQL($collector);
+            $gql = new GraphQL();
+            $gql->register($collector);
             $gql->activate_wpgraphql_hooks();
 
             // Start a resolver span (simulating graphql_pre_resolve_field)

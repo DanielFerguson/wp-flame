@@ -54,7 +54,9 @@ namespace WPFlame\Tests\Unit {
 
         private function make_http(): Http
         {
-            return new Http(Collector::instance());
+            $http = new Http();
+            $http->register( Collector::instance() );
+            return $http;
         }
 
         public function test_on_pre_request_creates_span_and_returns_preempt_unchanged(): void

@@ -171,30 +171,43 @@ function wp_flame_init(): void {
         }
     }
 
-    // Two-phase GraphQL detection (GRAPHQL_REQUEST not available at plugins_loaded)
-    $graphql_endpoint = apply_filters( 'graphql_endpoint', 'graphql' );
-    $request_path = isset( $_SERVER['REQUEST_URI'] )
-        ? rtrim( parse_url( wp_unslash( $_SERVER['REQUEST_URI'] ), PHP_URL_PATH ) ?: '', '/' )
-        : '';
-    $is_likely_graphql = WPFlame\GraphQL::is_graphql_endpoint( $request_path, $graphql_endpoint );
-    $graphql_inst = null;
+    // --- Instrumentor loop (DB/GraphQL mutual exclusion) ---
+    $full_query_text = (bool) $config->get( 'wp_flame_full_query_text', false );
+    $instrumentors = [
+        new WPFlame\DbInstrumentor( $wpdb, $full_query_text ),
+        new WPFlame\Http(),
+        new WPFlame\GraphQL( $full_query_text, $wpdb ),
+        new WPFlame\CallbackInstrumentor( $config ),
+    ];
+    $instrumentors = apply_filters( 'wp_flame_instrumentors', $instrumentors );
 
-    if ( $is_likely_graphql ) {
-        // Enable query logging for GraphQL DB capture
-        if ( ! defined( 'SAVEQUERIES' ) ) {
-            define( 'SAVEQUERIES', true );
+    $graphql_active = false;
+    foreach ( $instrumentors as $inst ) {
+        if ( ! ( $inst instanceof WPFlame\Instrumentor ) ) {
+            continue;
         }
-        $graphql_inst = new WPFlame\GraphQL( $collector, (bool) $config->get( 'wp_flame_full_query_text', false ) );
-        $GLOBALS['wp_flame_skip_callback_wrapping'] = true;
-    } else {
-        if ( WPFlame\DB::can_replace( $wpdb ) ) {
-            $GLOBALS['wpdb'] = WPFlame\DB::from_wpdb( $wpdb, $collector, (bool) $config->get( 'wp_flame_full_query_text', false ) );
+        if ( $inst instanceof WPFlame\GraphQL ) {
+            if ( $inst->is_applicable() ) {
+                if ( ! defined( 'SAVEQUERIES' ) ) {
+                    define( 'SAVEQUERIES', true );
+                }
+                $graphql_active = true;
+                $inst->register( $collector );
+            }
+        } elseif ( $inst instanceof WPFlame\DbInstrumentor ) {
+            if ( ! $graphql_active && $inst->is_applicable() ) {
+                $inst->register( $collector );
+            }
+        } else {
+            if ( $inst->is_applicable() ) {
+                $inst->register( $collector );
+            }
         }
-        $GLOBALS['wp_flame_skip_callback_wrapping'] = false;
     }
 
-    // HTTP request instrumentation
-    new WPFlame\Http( $collector );
+    if ( $graphql_active ) {
+        $GLOBALS['wp_flame_skip_callback_wrapping'] = true;
+    }
 
     // Capture which template file WordPress selects for rendering
     add_filter( 'template_include', function ( $template ) use ( $collector ) {
@@ -295,49 +308,6 @@ function wp_flame_init(): void {
         }
     } );
 
-    // Per-callback instrumentation — guarded by flag (cleared on GraphQL false-positive)
-    $min_callback_ms = (float) $config->get( 'wp_flame_min_callback_ms', 0.5 );
-
-    add_action( 'plugins_loaded', function () use ( $collector, $min_callback_ms ) {
-        if ( ! empty( $GLOBALS['wp_flame_skip_callback_wrapping'] ) ) {
-            return;
-        }
-        wp_flame_wrap_callbacks( $collector, $min_callback_ms );
-    }, 1 );
-
-    add_action( 'init', function () use ( $collector, $min_callback_ms ) {
-        if ( ! empty( $GLOBALS['wp_flame_skip_callback_wrapping'] ) ) {
-            return;
-        }
-        wp_flame_wrap_callbacks( $collector, $min_callback_ms );
-    }, 1 );
-
-    // Phase 2: confirm GraphQL detection at init (GRAPHQL_REQUEST now available)
-    add_action( 'init', function () use ( $collector, &$graphql_inst, $is_likely_graphql ) {
-        if ( ! $is_likely_graphql ) {
-            return;
-        }
-
-        $confirmed = defined( 'GRAPHQL_REQUEST' ) && GRAPHQL_REQUEST;
-        $has_wpgraphql = function_exists( 'graphql' );
-
-        if ( $confirmed && $has_wpgraphql ) {
-            $graphql_inst->activate_wpgraphql_hooks();
-        } elseif ( $confirmed ) {
-            // Tier 2: DB hooks already active, nothing more to do
-        } else {
-            // False positive: deactivate GraphQL hooks, start normal instrumentation
-            $graphql_inst->deactivate();
-            $graphql_inst = null;
-
-            global $wpdb;
-            if ( WPFlame\DB::can_replace( $wpdb ) ) {
-                $GLOBALS['wpdb'] = WPFlame\DB::from_wpdb( $wpdb, $collector, (bool) WPFlame\Config::instance()->get( 'wp_flame_full_query_text', false ) );
-            }
-
-            $GLOBALS['wp_flame_skip_callback_wrapping'] = false;
-        }
-    }, 0 );
 }
 
 function wp_flame_shutdown(): void {
@@ -448,43 +418,6 @@ function wp_flame_shutdown(): void {
         $key   = 'wp_flame_budget_violations';
         $count = (int) get_transient( $key );
         set_transient( $key, $count + 1, HOUR_IN_SECONDS );
-    }
-}
-
-/**
- * Wrap registered WordPress hook callbacks with timing instrumentation.
- * Iterates all hooks in $wp_filter and replaces each callback's function
- * entry with a CallbackWrapper that adds span timing.
- */
-function wp_flame_wrap_callbacks( WPFlame\Collector $collector, float $min_ms ): void {
-    foreach ( $GLOBALS['wp_filter'] as $hook_name => $hook_instance ) {
-        if ( ! ( $hook_instance instanceof \WP_Hook ) ) {
-            continue;
-        }
-
-        foreach ( $hook_instance->callbacks as $priority => $priority_callbacks ) {
-            foreach ( $priority_callbacks as $id => $the_ ) {
-                // Skip already-wrapped callbacks
-                if ( $the_['function'] instanceof WPFlame\CallbackWrapper ) {
-                    continue;
-                }
-
-                $original = $the_['function'];
-
-                // Skip our own plugin's callbacks to avoid self-instrumentation
-                $source = WPFlame\CallbackResolver::resolve_source( $id, $original, $collector );
-                if ( strpos( $source['source'], 'wp-flame' ) !== false || $source['source'] === 'wordpress-apm-plugin' ) {
-                    continue;
-                }
-
-                $name = WPFlame\CallbackResolver::resolve_name( $id, $original );
-
-                $hook_instance->callbacks[ $priority ][ $id ]['function'] = new WPFlame\CallbackWrapper(
-                    $original, $collector, $hook_name, (int) $priority,
-                    $name, $source, $min_ms
-                );
-            }
-        }
     }
 }
 
