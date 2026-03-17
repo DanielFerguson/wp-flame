@@ -32,6 +32,7 @@ class Storage
             query_count int unsigned NOT NULL DEFAULT 0,
             peak_memory bigint unsigned NOT NULL DEFAULT 0,
             created_at datetime NOT NULL DEFAULT '0000-00-00 00:00:00',
+            score tinyint unsigned DEFAULT NULL,
             trace_data longtext NOT NULL,
             PRIMARY KEY  (id),
             UNIQUE KEY trace_id (trace_id),
@@ -42,22 +43,26 @@ class Storage
         dbDelta($sql);
     }
 
-    public function save_trace(Trace $trace): void
+    public function save_trace(Trace $trace, ?int $score = null): void
     {
-        $this->wpdb->insert(
-            $this->table,
-            [
-                'trace_id'    => $trace->id,
-                'url'         => $trace->url,
-                'method'      => $trace->method,
-                'total_ms'    => $trace->total_ms,
-                'query_count' => $trace->query_count,
-                'peak_memory' => $trace->peak_memory,
-                'created_at'  => current_time('mysql', true),
-                'trace_data'  => wp_json_encode($trace->toArray()),
-            ],
-            ['%s', '%s', '%s', '%f', '%d', '%d', '%s', '%s']
-        );
+        $data    = [
+            'trace_id'    => $trace->id,
+            'url'         => $trace->url,
+            'method'      => $trace->method,
+            'total_ms'    => $trace->total_ms,
+            'query_count' => $trace->query_count,
+            'peak_memory' => $trace->peak_memory,
+            'created_at'  => current_time('mysql', true),
+            'trace_data'  => wp_json_encode($trace->toArray()),
+        ];
+        $formats = ['%s', '%s', '%s', '%f', '%d', '%d', '%s', '%s'];
+
+        if ($score !== null) {
+            $data['score']  = $score;
+            $formats[]      = '%d';
+        }
+
+        $this->wpdb->insert($this->table, $data, $formats);
     }
 
     public function get_trace(string $trace_id): ?Trace
@@ -127,7 +132,7 @@ class Storage
         $orderby = in_array($filters['orderby'] ?? '', $allowed_orderby, true) ? $filters['orderby'] : 'created_at';
         $order   = strtoupper($filters['order'] ?? '') === 'ASC' ? 'ASC' : 'DESC';
 
-        $sql = "SELECT trace_id, url, method, total_ms, query_count, peak_memory, created_at
+        $sql = "SELECT trace_id, url, method, total_ms, query_count, peak_memory, created_at, score
                 FROM {$this->table}
                 WHERE {$where}
                 ORDER BY {$orderby} {$order}
@@ -234,6 +239,15 @@ class Storage
             'avg_queries' => (float) ($current->avg_queries ?? 0),
             'prev_avg_ms' => $prev->avg_ms !== null ? (float) $prev->avg_ms : null,
         ];
+    }
+
+    public function get_avg_score(int $days = 7): ?float
+    {
+        $result = $this->wpdb->get_var($this->wpdb->prepare(
+            "SELECT AVG(score) FROM `{$this->table}` WHERE score IS NOT NULL AND created_at >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL %d DAY)",
+            $days
+        ));
+        return $result !== null ? round((float) $result, 1) : null;
     }
 
     /**
