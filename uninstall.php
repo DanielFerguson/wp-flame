@@ -15,7 +15,8 @@ global $wpdb;
 
 // Drop custom table
 $table = $wpdb->prefix . 'flame_traces';
-$wpdb->query( "DROP TABLE IF EXISTS {$table}" );
+// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name is safe: prefix + static suffix
+$wpdb->query( "DROP TABLE IF EXISTS `{$table}`" );
 
 // Delete all plugin options
 $wpdb->query( $wpdb->prepare(

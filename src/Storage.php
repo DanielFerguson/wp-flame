@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace WPFlame;
 
+if ( ! defined( 'ABSPATH' ) ) {
+    exit;
+}
+
 class Storage
 {
     private \wpdb $wpdb;
@@ -179,7 +183,8 @@ class Storage
 
     public function purge_all(): int
     {
-        return (int) $this->wpdb->query("DELETE FROM {$this->table}");
+        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name is safe: prefix + static suffix
+        return (int) $this->wpdb->query( "DELETE FROM `{$this->table}`" );
     }
 
     /**
@@ -187,8 +192,9 @@ class Storage
      */
     public function get_stats(): array
     {
+        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name is safe: prefix + static suffix
         $row = $this->wpdb->get_row(
-            "SELECT COUNT(*) as count, COALESCE(SUM(LENGTH(trace_data)), 0) as bytes FROM {$this->table}"
+            "SELECT COUNT(*) as count, COALESCE(SUM(LENGTH(trace_data)), 0) as bytes FROM `{$this->table}`"
         );
         return [
             'count' => (int) ($row->count ?? 0),

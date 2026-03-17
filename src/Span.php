@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace WPFlame;
 
+if ( ! defined( 'ABSPATH' ) ) {
+    exit;
+}
+
 class Span
 {
     public const TYPE_CORE   = 'core';

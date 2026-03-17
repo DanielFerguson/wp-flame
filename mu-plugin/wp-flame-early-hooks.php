@@ -8,6 +8,10 @@
  * @package WPFlame
  */
 
+if ( ! defined( 'ABSPATH' ) ) {
+    exit;
+}
+
 // Record request start as early as possible
 $wp_flame_request_start = microtime(true);
 

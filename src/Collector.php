@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace WPFlame;
 
+if ( ! defined( 'ABSPATH' ) ) {
+    exit;
+}
+
 class Collector
 {
     private static ?self $instance = null;
@@ -178,8 +182,8 @@ class Collector
 
         return new Trace(
             self::generate_uuid(),
-            $_SERVER['REQUEST_URI'] ?? '/',
-            $_SERVER['REQUEST_METHOD'] ?? 'GET',
+            isset($_SERVER['REQUEST_URI']) ? esc_url_raw(wp_unslash($_SERVER['REQUEST_URI'])) : '/',
+            isset($_SERVER['REQUEST_METHOD']) ? sanitize_text_field(wp_unslash($_SERVER['REQUEST_METHOD'])) : 'GET',
             gmdate('c'),
             $total_ms,
             (int) memory_get_peak_usage(true),

@@ -238,9 +238,9 @@ function wp_flame_shutdown(): void {
 
     // Force-trace via admin bar button (cookie)
     $force_trace = false;
-    if ( ! empty( $_COOKIE['wp_flame_force_trace'] ) ) {
+    if ( ! empty( $_COOKIE['wp_flame_force_trace'] ) && function_exists('is_user_logged_in') && is_user_logged_in() && current_user_can( 'manage_options' ) ) {
         $force_trace = true;
-        setcookie( 'wp_flame_force_trace', '', time() - 3600, '/' );
+        setcookie( 'wp_flame_force_trace', '', time() - 3600, COOKIEPATH, COOKIE_DOMAIN );
     }
 
     if ( ! $force_trace ) {

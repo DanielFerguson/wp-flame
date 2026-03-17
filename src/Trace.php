@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace WPFlame;
 
+if ( ! defined( 'ABSPATH' ) ) {
+    exit;
+}
+
 class Trace
 {
     public string $id;

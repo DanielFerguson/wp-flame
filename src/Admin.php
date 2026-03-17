@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace WPFlame;
 
+if ( ! defined( 'ABSPATH' ) ) {
+    exit;
+}
+
 class Admin
 {
     private Storage $storage;
@@ -54,15 +58,13 @@ class Admin
             return;
         }
 
-        if (! isset($_POST['_wpnonce']) || ! wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['_wpnonce'])), 'wp_flame_delete')) {
-            return;
-        }
+        $trace_id = sanitize_text_field(wp_unslash($_POST['wp_flame_delete_trace']));
+        check_admin_referer('wp_flame_delete_' . $trace_id);
 
         if (! current_user_can('manage_options')) {
-            return;
+            wp_die('Unauthorized.');
         }
 
-        $trace_id = sanitize_text_field(wp_unslash($_POST['wp_flame_delete_trace']));
         $this->storage->delete_trace($trace_id);
 
         set_transient('wp_flame_deleted_' . get_current_user_id(), true, 30);
@@ -78,10 +80,10 @@ class Admin
             $filters['url'] = sanitize_text_field(wp_unslash($_GET['s']));
         }
         if (! empty($_GET['min_duration'])) {
-            $filters['min_duration'] = (float) $_GET['min_duration'];
+            $filters['min_duration'] = (float) wp_unslash($_GET['min_duration']);
         }
 
-        $paged    = max(1, (int) ($_GET['paged'] ?? 1));
+        $paged    = max(1, (int) wp_unslash($_GET['paged'] ?? 1));
         $per_page = 20;
 
         $filters['page']     = $paged;
@@ -136,7 +138,7 @@ class Admin
             echo '<td>';
             echo '<a href="' . esc_url($view_url) . '">View</a> | ';
             echo '<form method="post" style="display:inline">';
-            wp_nonce_field('wp_flame_delete');
+            wp_nonce_field('wp_flame_delete_' . $row['trace_id']);
             echo '<input type="hidden" name="wp_flame_delete_trace" value="' . esc_attr($row['trace_id']) . '">';
             echo '<button type="submit" class="button-link" onclick="return confirm(\'Delete this trace?\')">Delete</button>';
             echo '</form>';
@@ -146,14 +148,15 @@ class Admin
         echo '</tbody></table>';
 
         // Pagination
-        if ($pages > 1) {
+        $pagination = paginate_links([
+            'base'    => add_query_arg('paged', '%#%'),
+            'format'  => '',
+            'current' => $paged,
+            'total'   => $pages,
+        ]);
+        if ($pagination) {
             echo '<div class="tablenav bottom"><div class="tablenav-pages">';
-            echo paginate_links([
-                'base'    => add_query_arg('paged', '%#%'),
-                'format'  => '',
-                'current' => $paged,
-                'total'   => $pages,
-            ]);
+            echo wp_kses_post($pagination);
             echo '</div></div>';
         }
 

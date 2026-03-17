@@ -8,6 +8,12 @@ if (! file_exists($wp_flame_autoload)) {
 
 require_once $wp_flame_autoload;
 
+// Define ABSPATH so src/ ABSPATH guards don't exit during unit tests.
+// Use the same path the CollectorTest expects for its core-file attribution test.
+if (! defined('ABSPATH')) {
+    define('ABSPATH', '/var/www/html/');
+}
+
 // If running integration suite, load WordPress test framework
 $is_integration = getenv('WP_TESTS_DIR') !== false;
 
