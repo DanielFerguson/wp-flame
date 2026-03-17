@@ -10,6 +10,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class Storage
 {
+    const SCHEMA_VERSION = 1;
+
     private \wpdb $wpdb;
     private string $table;
 
@@ -47,8 +49,32 @@ class Storage
         dbDelta($sql);
     }
 
+    /**
+     * Run schema migrations if needed.
+     */
+    public function maybe_upgrade(): void
+    {
+        $current = (int) get_option( 'wp_flame_schema_version', 0 );
+        if ( $current >= self::SCHEMA_VERSION ) {
+            return;
+        }
+
+        $this->create_table();
+
+        update_option( 'wp_flame_schema_version', self::SCHEMA_VERSION );
+    }
+
     public function save_trace(Trace $trace, ?int $score = null, int $user_id = 0, string $ip_address = ''): void
     {
+        $json = wp_json_encode( $trace->toArray() );
+        if ( $json === false ) {
+            $json = wp_json_encode( $trace->toArray(), JSON_INVALID_UTF8_SUBSTITUTE );
+            if ( $json === false ) {
+                error_log( 'WP Flame: Failed to encode trace ' . $trace->id );
+                return;
+            }
+        }
+
         $data    = [
             'trace_id'    => $trace->id,
             'url'         => $trace->url,
@@ -56,19 +82,22 @@ class Storage
             'total_ms'    => $trace->total_ms,
             'query_count' => $trace->query_count,
             'peak_memory' => $trace->peak_memory,
-            'created_at'  => current_time('mysql', true),
+            'created_at'  => current_time( 'mysql', true ),
             'user_id'     => $user_id,
             'ip_address'  => $ip_address,
-            'trace_data'  => wp_json_encode($trace->toArray()),
+            'trace_data'  => $json,
         ];
-        $formats = ['%s', '%s', '%s', '%f', '%d', '%d', '%s', '%d', '%s', '%s'];
+        $formats = [ '%s', '%s', '%s', '%f', '%d', '%d', '%s', '%d', '%s', '%s' ];
 
-        if ($score !== null) {
-            $data['score']  = $score;
-            $formats[]      = '%d';
+        if ( $score !== null ) {
+            $data['score'] = $score;
+            $formats[]     = '%d';
         }
 
-        $this->wpdb->insert($this->table, $data, $formats);
+        $result = $this->wpdb->insert( $this->table, $data, $formats );
+        if ( $result === false ) {
+            error_log( 'WP Flame: Failed to save trace ' . $trace->id . ': ' . $this->wpdb->last_error );
+        }
     }
 
     public function get_trace(string $trace_id): ?Trace
