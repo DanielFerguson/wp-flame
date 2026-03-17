@@ -197,9 +197,6 @@ class Admin
         $slowest_page_url = ! empty($slowest_pages) ? $slowest_pages[0]['page_url'] : '—';
         $slowest_page_ms  = ! empty($slowest_pages) ? round((float) $slowest_pages[0]['avg_ms'], 1) : 0;
 
-        // Chart 1 sparkline data
-        $daily = $this->storage->get_daily_avg_ms(7);
-
         // Summary stat cards
         echo '<div class="wp-flame-summary">';
 
@@ -210,25 +207,6 @@ class Admin
             echo '<span class="wp-flame-trend ' . esc_attr($trend_class) . '">' . esc_html($trend) . '</span>';
         } else {
             echo '<span class="wp-flame-trend">' . esc_html($trend) . '</span>';
-        }
-        // Chart 1: Response Time Sparkline
-        if (count($daily) >= 2) {
-            $values = array_map(function ($d) { return (float) $d['avg_ms']; }, $daily);
-            $max    = max($values) ?: 1;
-            $min    = min($values);
-            $w      = 100;
-            $h      = 30;
-            $points = [];
-            $count  = count($values);
-            for ($i = 0; $i < $count; $i++) {
-                $x        = ($i / max(1, $count - 1)) * $w;
-                $y        = $h - (($values[$i] - $min) / max(1, $max - $min)) * ($h - 4) - 2;
-                $points[] = round($x, 1) . ',' . round($y, 1);
-            }
-            $polyline = implode(' ', $points);
-            echo '<svg class="wp-flame-sparkline" width="' . $w . '" height="' . $h . '" viewBox="0 0 ' . $w . ' ' . $h . '">';
-            echo '<polyline points="' . esc_attr($polyline) . '" fill="none" stroke="#7c3aed" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />';
-            echo '</svg>';
         }
         echo '</div>';
 

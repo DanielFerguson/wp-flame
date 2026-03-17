@@ -245,24 +245,6 @@ class Storage
     /**
      * @return array<int, array<string, mixed>>
      */
-    public function get_daily_avg_ms(int $days = 7): array
-    {
-        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-        $results = $this->wpdb->get_results($this->wpdb->prepare(
-            "SELECT DATE(created_at) as day, AVG(total_ms) as avg_ms
-             FROM `{$this->table}`
-             WHERE created_at >= DATE_SUB(NOW(), INTERVAL %d DAY)
-             GROUP BY DATE(created_at)
-             ORDER BY day ASC",
-            $days
-        ), ARRAY_A);
-
-        return is_array($results) ? $results : [];
-    }
-
-    /**
-     * @return array<int, array<string, mixed>>
-     */
     public function get_response_time_distribution(int $days = 7): array
     {
         $buckets = [

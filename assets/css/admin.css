@@ -231,12 +231,6 @@
     margin-top: 2px;
 }
 
-/* Sparkline */
-.wp-flame-sparkline {
-    display: block;
-    margin-top: 4px;
-}
-
 /* Time breakdown bar */
 .wp-flame-breakdown {
     margin: 12px 0;
