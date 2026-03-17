@@ -384,4 +384,36 @@ class Storage
         ), ARRAY_A);
         return is_array($results) ? $results : [];
     }
+
+    /**
+     * Get aggregate stats for a specific route (URL stripped of query params).
+     *
+     * @return array{avg_ms: float, min_ms: float, max_ms: float, avg_queries: float, count: int}|null
+     */
+    public function get_route_stats(string $url, int $days = 7): ?array
+    {
+        $route = explode('?', $url, 2)[0];
+
+        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name is safe
+        $row = $this->wpdb->get_row($this->wpdb->prepare(
+            "SELECT AVG(total_ms) as avg_ms, MIN(total_ms) as min_ms, MAX(total_ms) as max_ms,
+                    AVG(query_count) as avg_queries, COUNT(*) as count
+             FROM `{$this->table}`
+             WHERE SUBSTRING_INDEX(url, '?', 1) = %s
+               AND created_at >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL %d DAY)",
+            $route, $days
+        ));
+
+        if (!$row || (int) $row->count < 2) {
+            return null; // Need at least 2 traces to compare against
+        }
+
+        return [
+            'avg_ms'      => round((float) $row->avg_ms, 1),
+            'min_ms'      => round((float) $row->min_ms, 1),
+            'max_ms'      => round((float) $row->max_ms, 1),
+            'avg_queries' => round((float) $row->avg_queries, 1),
+            'count'       => (int) $row->count,
+        ];
+    }
 }

@@ -407,3 +407,21 @@ a.wp-flame-histogram-row.wp-flame-histogram-active {
     color: #646970;
     flex-shrink: 0;
 }
+
+/* Route comparison */
+.wp-flame-route-comparison {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin: 8px 0;
+    padding: 10px 16px;
+    background: #fff;
+    border: 1px solid #c3c4c7;
+    border-radius: 4px;
+    font-size: 13px;
+}
+
+.wp-flame-route-stats {
+    color: #646970;
+    font-size: 12px;
+}
