@@ -7,7 +7,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 ### Added
+- Request identity tracking: user ID, IP address, and user agent captured on every trace
+- User and IP columns in trace list (clickable to filter)
+- Request context section on flame graph view (User, IP, User Agent)
+- Top Users by Load and Top IPs by Requests dashboard rankings
+- 3 abuse detection insight rules (high request rate, resource hog, API pagination scraping)
+- IP tracking toggle in settings for GDPR compliance
+- Per-route comparison on flame graph ("59% slower than average for this route")
+- Response time histogram expanded to 7 buckets (split 500ms+ into 500-1000, 1000-1500, 1500+)
 - Score column is now sortable in the trace list (click to sort by performance score)
+- Full GraphQL instrumentation: WPGraphQL native hooks for resolver timing, DB queries via log_query_custom_data, operation-level spans
+- Three-tier detection: full WPGraphQL instrumentation (Tier 1), lightweight fallback (Tier 2), unchanged normal requests (Tier 3)
+- Stellate compatibility: zero conflict with GraphQL CDN plugins (no $wpdb replacement or callback wrapping for GraphQL)
+- GraphQL type filter in trace list
+- Limited instrumentation badge for non-WPGraphQL GraphQL traces
 
 ### Changed
 - Version updated to 1.0.0

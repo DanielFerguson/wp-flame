@@ -390,4 +390,32 @@ class ScoreTest extends TestCase
 
         $this->assertSame(100, $cb_factor['score']);
     }
+
+    // ---------------------------------------------------------------------------
+    // GraphQL resolver span detected via hook meta
+    // ---------------------------------------------------------------------------
+
+    public function test_score_detects_slow_graphql_resolvers_via_hook_meta(): void
+    {
+        // Build a resolver span with meta['hook'] — same pattern Score.php:43 checks
+        $resolver_span = $this->make_span('r1', Span::TYPE_PLUGIN, 200.0,
+            ['hook' => 'graphql:RootQuery.posts', 'type_name' => 'RootQuery', 'field_key' => 'posts']);
+
+        $trace = $this->make_trace(300.0, [$resolver_span]);
+
+        $result = Score::calculate($trace);
+
+        // The slow_callbacks factor should detect this span (duration 200ms > 50ms threshold)
+        $slow_cb_factor = null;
+        foreach ($result['factors'] as $factor) {
+            if ($factor['key'] === 'slow_callbacks') {
+                $slow_cb_factor = $factor;
+                break;
+            }
+        }
+
+        $this->assertNotNull($slow_cb_factor);
+        $this->assertSame('1', $slow_cb_factor['value']); // 1 slow resolver
+        $this->assertLessThan(100, $slow_cb_factor['score']); // Score penalized
+    }
 }

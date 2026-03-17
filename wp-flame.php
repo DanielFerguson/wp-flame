@@ -151,10 +151,28 @@ function wp_flame_init(): void {
         }
     }
 
-    // Replace $wpdb with instrumented version
+    // Two-phase GraphQL detection (GRAPHQL_REQUEST not available at plugins_loaded)
+    $graphql_endpoint = apply_filters( 'graphql_endpoint', 'graphql' );
+    $request_path = isset( $_SERVER['REQUEST_URI'] )
+        ? rtrim( parse_url( wp_unslash( $_SERVER['REQUEST_URI'] ), PHP_URL_PATH ) ?: '', '/' )
+        : '';
+    $is_likely_graphql = WPFlame\GraphQL::is_graphql_endpoint( $request_path, $graphql_endpoint );
+
     global $wpdb;
-    if ( WPFlame\DB::can_replace( $wpdb ) ) {
-        $GLOBALS['wpdb'] = WPFlame\DB::from_wpdb( $wpdb, $collector );
+    $graphql_inst = null;
+
+    if ( $is_likely_graphql ) {
+        // Enable query logging for GraphQL DB capture
+        if ( ! defined( 'SAVEQUERIES' ) ) {
+            define( 'SAVEQUERIES', true );
+        }
+        $graphql_inst = new WPFlame\GraphQL( $collector );
+        $GLOBALS['wp_flame_skip_callback_wrapping'] = true;
+    } else {
+        if ( WPFlame\DB::can_replace( $wpdb ) ) {
+            $GLOBALS['wpdb'] = WPFlame\DB::from_wpdb( $wpdb, $collector );
+        }
+        $GLOBALS['wp_flame_skip_callback_wrapping'] = false;
     }
 
     // HTTP request instrumentation
@@ -255,18 +273,49 @@ function wp_flame_init(): void {
         }
     } );
 
-    // Per-callback instrumentation (Phase 2)
+    // Per-callback instrumentation — guarded by flag (cleared on GraphQL false-positive)
     $min_callback_ms = (float) get_option( 'wp_flame_min_callback_ms', 0.5 );
 
-    // Pass 1: wrap callbacks registered before plugins_loaded
     add_action( 'plugins_loaded', function () use ( $collector, $min_callback_ms ) {
+        if ( ! empty( $GLOBALS['wp_flame_skip_callback_wrapping'] ) ) {
+            return;
+        }
         wp_flame_wrap_callbacks( $collector, $min_callback_ms );
     }, 1 );
 
-    // Pass 2: wrap callbacks registered between plugins_loaded and init
     add_action( 'init', function () use ( $collector, $min_callback_ms ) {
+        if ( ! empty( $GLOBALS['wp_flame_skip_callback_wrapping'] ) ) {
+            return;
+        }
         wp_flame_wrap_callbacks( $collector, $min_callback_ms );
     }, 1 );
+
+    // Phase 2: confirm GraphQL detection at init (GRAPHQL_REQUEST now available)
+    add_action( 'init', function () use ( $collector, &$graphql_inst, $is_likely_graphql ) {
+        if ( ! $is_likely_graphql ) {
+            return;
+        }
+
+        $confirmed = defined( 'GRAPHQL_REQUEST' ) && GRAPHQL_REQUEST;
+        $has_wpgraphql = function_exists( 'graphql' );
+
+        if ( $confirmed && $has_wpgraphql ) {
+            $graphql_inst->activate_wpgraphql_hooks();
+        } elseif ( $confirmed ) {
+            // Tier 2: DB hooks already active, nothing more to do
+        } else {
+            // False positive: deactivate GraphQL hooks, start normal instrumentation
+            $graphql_inst->deactivate();
+            $graphql_inst = null;
+
+            global $wpdb;
+            if ( WPFlame\DB::can_replace( $wpdb ) ) {
+                $GLOBALS['wpdb'] = WPFlame\DB::from_wpdb( $wpdb, $collector );
+            }
+
+            $GLOBALS['wp_flame_skip_callback_wrapping'] = false;
+        }
+    }, 0 );
 }
 
 function wp_flame_shutdown(): void {

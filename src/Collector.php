@@ -113,6 +113,45 @@ class Collector
     }
 
     /**
+     * Create a span with pre-computed timing (for log_query_custom_data).
+     * Accepts absolute microtime start and duration in seconds.
+     * Parent is determined from the current span stack.
+     */
+    public function add_completed_span(
+        string $name,
+        string $type,
+        string $source,
+        float $abs_start,
+        float $duration_sec,
+        array $meta = []
+    ): string {
+        if ($this->stopped) {
+            return '';
+        }
+
+        $id = self::generate_uuid();
+        $parent_id = ! empty($this->span_stack)
+            ? $this->span_stack[count($this->span_stack) - 1]['id']
+            : null;
+
+        $start_ms = ($abs_start - $this->request_start) * 1000;
+        $duration_ms = $duration_sec * 1000;
+
+        $this->spans[] = new Span(
+            $id,
+            $parent_id,
+            $name,
+            $type,
+            $source,
+            max(0.0, $start_ms),
+            max(0.0, $duration_ms),
+            $meta
+        );
+
+        return $id;
+    }
+
+    /**
      * End a span with a minimum duration threshold.
      * Discards spans below threshold unless they have retained child spans.
      */
