@@ -18,7 +18,7 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-define( 'WP_FLAME_VERSION', '1.0.0' );
+define( 'WP_FLAME_VERSION', '1.1.1' );
 define( 'WP_FLAME_FILE', __FILE__ );
 define( 'WP_FLAME_DIR', plugin_dir_path( __FILE__ ) );
 define( 'WP_FLAME_URL', plugin_dir_url( __FILE__ ) );
