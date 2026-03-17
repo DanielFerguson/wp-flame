@@ -185,6 +185,7 @@ class Admin
         if (isset($filters['max_duration'])) $base_args['max_duration'] = $filters['max_duration'];
 
         $sortable_columns = [
+            'score'       => __('Score', 'wp-flame'),
             'total_ms'    => __('Duration', 'wp-flame'),
             'query_count' => __('Queries', 'wp-flame'),
             'peak_memory' => __('Memory', 'wp-flame'),
@@ -194,7 +195,6 @@ class Admin
         echo '<table class="widefat striped wp-flame-traces">';
         echo '<thead><tr>';
         echo '<th>' . esc_html__('URL', 'wp-flame') . '</th>';
-        echo '<th>' . esc_html__('Score', 'wp-flame') . '</th>';
         echo '<th>' . esc_html__('Method', 'wp-flame') . '</th>';
 
         foreach ($sortable_columns as $col => $label) {
@@ -219,13 +219,13 @@ class Admin
 
             echo $is_slow ? '<tr class="wp-flame-slow">' : '<tr>';
             echo '<td><a href="' . esc_url($view_url) . '">' . esc_html($row['url']) . '</a></td>';
+            echo '<td>' . esc_html($row['method']) . '</td>';
             if ($row['score'] !== null) {
                 $badge_grade = Score::grade((int) $row['score']);
                 echo '<td><span class="wp-flame-score-badge" style="background:' . esc_attr($badge_grade['color']) . '">' . esc_html((string) $row['score']) . '</span></td>';
             } else {
                 echo '<td>&mdash;</td>';
             }
-            echo '<td>' . esc_html($row['method']) . '</td>';
             echo '<td>' . esc_html(round((float) $row['total_ms'], 1)) . ' ms</td>';
             echo '<td>' . esc_html($row['query_count']) . '</td>';
             echo '<td>' . esc_html($mem_mb) . ' MB</td>';

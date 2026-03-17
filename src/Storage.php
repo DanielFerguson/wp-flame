@@ -128,7 +128,7 @@ class Storage
         $page     = max(1, (int) ($filters['page'] ?? 1));
         $offset   = ($page - 1) * $per_page;
 
-        $allowed_orderby = ['created_at', 'total_ms', 'query_count', 'peak_memory'];
+        $allowed_orderby = ['created_at', 'total_ms', 'query_count', 'peak_memory', 'score'];
         $orderby = in_array($filters['orderby'] ?? '', $allowed_orderby, true) ? $filters['orderby'] : 'created_at';
         $order   = strtoupper($filters['order'] ?? '') === 'ASC' ? 'ASC' : 'DESC';
 
