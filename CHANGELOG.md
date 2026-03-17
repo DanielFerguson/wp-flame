@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-03-17
+
+### Added
+- Clear button next to Filter on the trace list to reset all filters
+
+### Changed
+- Color legend moved below score breakdown, just above the flame graph
+
+### Fixed
+- Route comparison banner text running into route stats (added spacing)
+
 ## [1.1.0] - 2026-03-17
 
 ### Added

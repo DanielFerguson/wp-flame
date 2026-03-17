@@ -3,7 +3,7 @@
  * Plugin Name: WP Flame
  * Plugin URI:  https://www.chepstowe.consulting
  * Description: See exactly where your WordPress request spends its time. Interactive flame graph APM.
- * Version:     1.1.0
+ * Version:     1.1.1
  * Author:      Chepstowe Consulting
  * Author URI:  https://www.chepstowe.consulting
  * License:     GPL-2.0-or-later
