@@ -269,6 +269,7 @@ class Admin
         echo '</select>';
 
         echo ' <input type="submit" class="button" value="' . esc_attr__('Filter', 'wp-flame') . '">';
+        echo ' <a href="' . esc_url(admin_url('tools.php?page=wp-flame')) . '" class="button">' . esc_html__('Clear', 'wp-flame') . '</a>';
         echo '</div></div>';
         echo '</form>';
 
