@@ -607,6 +607,24 @@ class Admin
         echo '</div>'; // .wp-flame-ranking
 
         echo '</div>'; // .wp-flame-rankings (second row)
+
+        // Fetch recent traces for abuse pattern detection (url and ip_address are sufficient)
+        $recent_trace_rows = $this->storage->list_traces(['per_page' => 200, 'page' => 1]);
+
+        // Abuse detection insights
+        $abuse_insights = \WPFlame\Insights::analyze_dashboard($top_users, $top_ips, $recent_trace_rows);
+        if (! empty($abuse_insights)) {
+            echo '<div class="wp-flame-insights">';
+            echo '<h3>' . esc_html__('Abuse Detection', 'wp-flame') . '</h3>';
+            foreach ($abuse_insights as $insight) {
+                $class = $insight['severity'] === 'warning' ? 'wp-flame-insight-warning' : 'wp-flame-insight-info';
+                echo '<div class="wp-flame-insight ' . esc_attr($class) . '">';
+                echo '<strong>' . esc_html($insight['title']) . '</strong>';
+                echo '<p>' . esc_html($insight['detail']) . '</p>';
+                echo '</div>';
+            }
+            echo '</div>';
+        }
     }
 
     /**
