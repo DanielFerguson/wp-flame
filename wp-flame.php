@@ -297,6 +297,24 @@ function wp_flame_shutdown(): void {
     global $wpdb;
     $storage = new WPFlame\Storage( $wpdb );
     $storage->save_trace( $trace );
+
+    // Step 7: Check performance budget thresholds
+    $budget_max_ms      = (int) get_option( 'wp_flame_budget_max_ms', 500 );
+    $budget_max_queries = (int) get_option( 'wp_flame_budget_max_queries', 100 );
+
+    $exceeded = false;
+    if ( $budget_max_ms > 0 && $trace->total_ms > $budget_max_ms ) {
+        $exceeded = true;
+    }
+    if ( $budget_max_queries > 0 && $trace->query_count > $budget_max_queries ) {
+        $exceeded = true;
+    }
+
+    if ( $exceeded ) {
+        $key   = 'wp_flame_budget_violations';
+        $count = (int) get_transient( $key );
+        set_transient( $key, $count + 1, HOUR_IN_SECONDS );
+    }
 }
 
 /**
