@@ -131,62 +131,76 @@ class Storage
     }
 
     /**
-     * @return array<int, array<string, mixed>>
+     * Build WHERE clause and parameters from filters.
+     *
+     * @param array $filters
+     * @return array{0: string, 1: array} [where_clause_without_WHERE_keyword, params]
      */
-    public function list_traces(array $filters): array
+    private function build_where_clause( array $filters ): array
     {
-        $where  = '1=1';
+        $where  = [];
         $params = [];
 
         if (! empty($filters['url'])) {
-            $where  .= ' AND url LIKE %s';
+            $where[]  = 'url LIKE %s';
             $params[] = '%' . $this->wpdb->esc_like($filters['url']) . '%';
         }
 
         if (isset($filters['min_duration'])) {
-            $where  .= ' AND total_ms >= %f';
+            $where[]  = 'total_ms >= %f';
             $params[] = (float) $filters['min_duration'];
         }
 
         if (isset($filters['max_duration'])) {
-            $where  .= ' AND total_ms < %f';
+            $where[]  = 'total_ms < %f';
             $params[] = (float) $filters['max_duration'];
         }
 
         if (! empty($filters['after'])) {
-            $where  .= ' AND created_at >= %s';
+            $where[]  = 'created_at >= %s';
             $params[] = $filters['after'];
         }
 
         if (! empty($filters['before'])) {
-            $where  .= ' AND created_at <= %s';
+            $where[]  = 'created_at <= %s';
             $params[] = $filters['before'];
         }
 
         if (! empty($filters['method'])) {
-            $where  .= ' AND method = %s';
+            $where[]  = 'method = %s';
             $params[] = $filters['method'];
         }
 
         if (isset($filters['user_id'])) {
-            $where  .= ' AND user_id = %d';
+            $where[]  = 'user_id = %d';
             $params[] = (int) $filters['user_id'];
         }
 
         if (! empty($filters['ip_address'])) {
-            $where  .= ' AND ip_address = %s';
+            $where[]  = 'ip_address = %s';
             $params[] = $filters['ip_address'];
         }
 
         if (isset($filters['min_score'])) {
-            $where  .= ' AND score >= %d';
+            $where[]  = 'score >= %d';
             $params[] = (int) $filters['min_score'];
         }
 
         if (isset($filters['max_score'])) {
-            $where  .= ' AND score <= %d';
+            $where[]  = 'score <= %d';
             $params[] = (int) $filters['max_score'];
         }
+
+        $where_sql = '1=1' . ( $where ? ' AND ' . implode( ' AND ', $where ) : '' );
+        return [ $where_sql, $params ];
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    public function list_traces(array $filters): array
+    {
+        list( $where_sql, $params ) = $this->build_where_clause( $filters );
 
         $per_page = (int) ($filters['per_page'] ?? 20);
         $page     = max(1, (int) ($filters['page'] ?? 1));
@@ -198,7 +212,7 @@ class Storage
 
         $sql = "SELECT trace_id, url, method, total_ms, query_count, peak_memory, created_at, score, user_id, ip_address
                 FROM {$this->table}
-                WHERE {$where}
+                WHERE {$where_sql}
                 ORDER BY {$orderby} {$order}
                 LIMIT %d OFFSET %d";
 
@@ -213,60 +227,9 @@ class Storage
 
     public function count_traces(array $filters): int
     {
-        $where  = '1=1';
-        $params = [];
+        list( $where_sql, $params ) = $this->build_where_clause( $filters );
 
-        if (! empty($filters['url'])) {
-            $where  .= ' AND url LIKE %s';
-            $params[] = '%' . $this->wpdb->esc_like($filters['url']) . '%';
-        }
-
-        if (isset($filters['min_duration'])) {
-            $where  .= ' AND total_ms >= %f';
-            $params[] = (float) $filters['min_duration'];
-        }
-
-        if (isset($filters['max_duration'])) {
-            $where  .= ' AND total_ms < %f';
-            $params[] = (float) $filters['max_duration'];
-        }
-
-        if (! empty($filters['after'])) {
-            $where  .= ' AND created_at >= %s';
-            $params[] = $filters['after'];
-        }
-
-        if (! empty($filters['before'])) {
-            $where  .= ' AND created_at <= %s';
-            $params[] = $filters['before'];
-        }
-
-        if (! empty($filters['method'])) {
-            $where  .= ' AND method = %s';
-            $params[] = $filters['method'];
-        }
-
-        if (isset($filters['user_id'])) {
-            $where  .= ' AND user_id = %d';
-            $params[] = (int) $filters['user_id'];
-        }
-
-        if (! empty($filters['ip_address'])) {
-            $where  .= ' AND ip_address = %s';
-            $params[] = $filters['ip_address'];
-        }
-
-        if (isset($filters['min_score'])) {
-            $where  .= ' AND score >= %d';
-            $params[] = (int) $filters['min_score'];
-        }
-
-        if (isset($filters['max_score'])) {
-            $where  .= ' AND score <= %d';
-            $params[] = (int) $filters['max_score'];
-        }
-
-        $sql = "SELECT COUNT(*) FROM {$this->table} WHERE {$where}";
+        $sql = "SELECT COUNT(*) FROM {$this->table} WHERE {$where_sql}";
 
         if (! empty($params)) {
             $sql = $this->wpdb->prepare($sql, $params);
