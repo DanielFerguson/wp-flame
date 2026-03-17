@@ -269,8 +269,19 @@ function wp_flame_shutdown(): void {
         }
     }
 
+    // Collect request-level metadata
+    $request_meta = [];
+
+    // Object cache stats
+    if ( isset( $GLOBALS['wp_object_cache'] ) ) {
+        $cache = $GLOBALS['wp_object_cache'];
+        $request_meta['cache_hits']    = (int) ( $cache->cache_hits ?? 0 );
+        $request_meta['cache_misses']  = (int) ( $cache->cache_misses ?? 0 );
+        $request_meta['cache_backend'] = get_class( $cache );
+    }
+
     // Step 4: Build trace
-    $trace = $collector->get_trace();
+    $trace = $collector->get_trace( $request_meta );
 
     // If force-trace, store the trace ID for admin notice
     if ( $force_trace && function_exists( 'set_transient' ) ) {
