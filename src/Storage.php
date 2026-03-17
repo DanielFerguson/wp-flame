@@ -10,7 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class Storage
 {
-    const SCHEMA_VERSION = 2;
+    const SCHEMA_VERSION = 3;
 
     private \wpdb $wpdb;
     private string $table;
@@ -34,6 +34,8 @@ class Storage
             total_ms float NOT NULL DEFAULT 0,
             query_count int unsigned NOT NULL DEFAULT 0,
             peak_memory bigint unsigned NOT NULL DEFAULT 0,
+            db_time_ms float NOT NULL DEFAULT 0,
+            http_time_ms float NOT NULL DEFAULT 0,
             created_at datetime NOT NULL DEFAULT '0000-00-00 00:00:00',
             user_id int NOT NULL DEFAULT 0,
             ip_address varchar(45) NOT NULL DEFAULT '',
@@ -63,10 +65,15 @@ class Storage
             return;
         }
 
+        // Always run dbDelta so new columns are added to existing tables.
+        $this->create_table();
+
         if ( $current < 2 ) {
-            $this->create_table();
             $this->wpdb->query( "UPDATE {$this->table} SET url_path = SUBSTRING_INDEX(url, '?', 1) WHERE url_path = ''" );
         }
+
+        // Version 3: db_time_ms and http_time_ms columns added by dbDelta above.
+        // Old rows default to 0 — no backfill needed.
 
         update_option( 'wp_flame_schema_version', self::SCHEMA_VERSION );
     }
@@ -84,20 +91,32 @@ class Storage
 
         $url_path = explode( '?', $trace->url, 2 )[0];
 
+        $db_time_ms   = 0.0;
+        $http_time_ms = 0.0;
+        foreach ( $trace->spans as $span ) {
+            if ( $span->type === \WPFlame\Span::TYPE_DB ) {
+                $db_time_ms += $span->duration_ms;
+            } elseif ( $span->type === \WPFlame\Span::TYPE_HTTP ) {
+                $http_time_ms += $span->duration_ms;
+            }
+        }
+
         $data    = [
-            'trace_id'    => $trace->id,
-            'url'         => $trace->url,
-            'url_path'    => $url_path,
-            'method'      => $trace->method,
-            'total_ms'    => $trace->total_ms,
-            'query_count' => $trace->query_count,
-            'peak_memory' => $trace->peak_memory,
-            'created_at'  => current_time( 'mysql', true ),
-            'user_id'     => $user_id,
-            'ip_address'  => $ip_address,
-            'trace_data'  => $json,
+            'trace_id'     => $trace->id,
+            'url'          => $trace->url,
+            'url_path'     => $url_path,
+            'method'       => $trace->method,
+            'total_ms'     => $trace->total_ms,
+            'query_count'  => $trace->query_count,
+            'peak_memory'  => $trace->peak_memory,
+            'db_time_ms'   => $db_time_ms,
+            'http_time_ms' => $http_time_ms,
+            'created_at'   => current_time( 'mysql', true ),
+            'user_id'      => $user_id,
+            'ip_address'   => $ip_address,
+            'trace_data'   => $json,
         ];
-        $formats = [ '%s', '%s', '%s', '%s', '%f', '%d', '%d', '%s', '%d', '%s', '%s' ];
+        $formats = [ '%s', '%s', '%s', '%s', '%f', '%d', '%d', '%f', '%f', '%s', '%d', '%s', '%s' ];
 
         if ( $score !== null ) {
             $data['score'] = $score;
@@ -352,29 +371,37 @@ class Storage
     /**
      * @return array<int, array<string, mixed>>
      */
-    public function get_response_time_distribution(int $days = 7): array
+    public function get_response_time_distribution( int $days = 7 ): array
     {
-        $buckets = [
-            ['label' => '0-50ms', 'min' => 0, 'max' => 50],
-            ['label' => '50-100ms', 'min' => 50, 'max' => 100],
-            ['label' => '100-200ms', 'min' => 100, 'max' => 200],
-            ['label' => '200-500ms', 'min' => 200, 'max' => 500],
-            ['label' => '500-1000ms', 'min' => 500, 'max' => 1000],
-            ['label' => '1000-1500ms', 'min' => 1000, 'max' => 1500],
-            ['label' => '1500ms+', 'min' => 1500, 'max' => 999999],
-        ];
+        $row = $this->wpdb->get_row(
+            $this->wpdb->prepare(
+                "SELECT
+                    SUM(total_ms < 50) AS b0,
+                    SUM(total_ms >= 50 AND total_ms < 100) AS b1,
+                    SUM(total_ms >= 100 AND total_ms < 200) AS b2,
+                    SUM(total_ms >= 200 AND total_ms < 500) AS b3,
+                    SUM(total_ms >= 500 AND total_ms < 1000) AS b4,
+                    SUM(total_ms >= 1000 AND total_ms < 1500) AS b5,
+                    SUM(total_ms >= 1500) AS b6
+                FROM {$this->table}
+                WHERE created_at >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL %d DAY)",
+                $days
+            )
+        );
 
-        $result = [];
-        foreach ($buckets as $bucket) {
-            // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-            $count = (int) $this->wpdb->get_var($this->wpdb->prepare(
-                "SELECT COUNT(*) FROM `{$this->table}` WHERE created_at >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL %d DAY) AND total_ms >= %f AND total_ms < %f",
-                $days, $bucket['min'], $bucket['max']
-            ));
-            $result[] = ['label' => $bucket['label'], 'count' => $count, 'min' => $bucket['min'], 'max' => $bucket['max']];
+        if ( ! $row ) {
+            $row = (object) [ 'b0' => 0, 'b1' => 0, 'b2' => 0, 'b3' => 0, 'b4' => 0, 'b5' => 0, 'b6' => 0 ];
         }
 
-        return $result;
+        return [
+            [ 'label' => '0-50ms',     'count' => (int) $row->b0, 'min' => 0,    'max' => 50 ],
+            [ 'label' => '50-100ms',   'count' => (int) $row->b1, 'min' => 50,   'max' => 100 ],
+            [ 'label' => '100-200ms',  'count' => (int) $row->b2, 'min' => 100,  'max' => 200 ],
+            [ 'label' => '200-500ms',  'count' => (int) $row->b3, 'min' => 200,  'max' => 500 ],
+            [ 'label' => '500-1000ms', 'count' => (int) $row->b4, 'min' => 500,  'max' => 1000 ],
+            [ 'label' => '1000-1500ms','count' => (int) $row->b5, 'min' => 1000, 'max' => 1500 ],
+            [ 'label' => '1500ms+',    'count' => (int) $row->b6, 'min' => 1500, 'max' => 999999 ],
+        ];
     }
 
     /**
@@ -466,6 +493,28 @@ class Storage
             $days
         ), ARRAY_A);
         return is_array($results) ? $results : [];
+    }
+
+    /**
+     * @param int $days
+     * @return array{avg_db_ms: float, avg_http_ms: float, avg_php_ms: float}|null
+     */
+    public function get_time_breakdown( int $days = 7 ): ?array
+    {
+        $row = $this->wpdb->get_row(
+            $this->wpdb->prepare(
+                "SELECT
+                    COALESCE(AVG(db_time_ms), 0) AS avg_db_ms,
+                    COALESCE(AVG(http_time_ms), 0) AS avg_http_ms,
+                    COALESCE(AVG(total_ms - COALESCE(db_time_ms, 0) - COALESCE(http_time_ms, 0)), 0) AS avg_php_ms
+                FROM {$this->table}
+                WHERE created_at >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL %d DAY)",
+                $days
+            ),
+            ARRAY_A
+        );
+
+        return $row ?: null;
     }
 
     /**
