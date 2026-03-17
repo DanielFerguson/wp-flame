@@ -678,7 +678,7 @@ class Admin
                 $class = $insight['severity'] === 'warning' ? 'wp-flame-insight-warning' : 'wp-flame-insight-info';
                 echo '<div class="wp-flame-insight ' . esc_attr($class) . '">';
                 echo '<strong>' . esc_html($insight['title']) . '</strong>';
-                echo '<p>' . esc_html($insight['detail']) . '</p>';
+                echo '<p>' . nl2br(esc_html($insight['detail'])) . '</p>';
                 echo '</div>';
             }
             echo '</div>';

@@ -474,7 +474,8 @@ class Insights
             $groups[$key]['pages'][] = $page;
         }
 
-        $insights = [];
+        // Collect confirmed sequential endpoints, grouped by IP
+        $by_ip = [];
 
         foreach ($groups as $data) {
             $pages = array_unique($data['pages']);
@@ -501,17 +502,19 @@ class Insights
                 continue;
             }
 
-            $ip       = $data['ip'];
-            $endpoint = $data['endpoint'];
-            $min_page = min($pages);
-            $max_page = max($pages);
+            $ip = $data['ip'];
+            $by_ip[$ip][] = sprintf('%s (pages %d-%d)', $data['endpoint'], min($pages), max($pages));
+        }
 
+        // One insight per IP, listing all scraped endpoints
+        $insights = [];
+
+        foreach ($by_ip as $ip => $endpoint_lines) {
             $insights[] = [
                 'severity' => 'warning',
                 /* translators: %s: IP address */
                 'title'    => sprintf(__('Possible API scraping detected from IP %s', 'wp-flame'), $ip),
-                /* translators: 1: endpoint URL, 2: minimum page number, 3: maximum page number */
-                'detail'   => sprintf(__('Sequential pagination through %1$s (pages %2$d-%3$d). This may be unauthorized data extraction.', 'wp-flame'), $endpoint, $min_page, $max_page),
+                'detail'   => implode("\n", $endpoint_lines) . "\n" . __('This may be unauthorized data extraction.', 'wp-flame'),
             ];
         }
 
