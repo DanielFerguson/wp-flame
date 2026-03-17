@@ -61,13 +61,20 @@ class Score
         // Factor 5: Slow Callbacks (15%) — best 0, worst ≥10
         $cb_score = self::interpolate((float) $slow_callback_count, 0.0, 10.0);
 
-        $overall = (int) round(
-            $rt_score * 0.35 +
-            $http_score * 0.20 +
-            $qc_score * 0.15 +
-            $db_ratio_score * 0.15 +
-            $cb_score * 0.15
-        );
+        // Allow site profiles to adjust factor weights/scores.
+        $computed_factors = apply_filters( 'wp_flame_score_factors', [
+            'response_time'  => [ 'weight' => 0.35, 'score' => $rt_score ],
+            'http_time'      => [ 'weight' => 0.20, 'score' => $http_score ],
+            'query_count'    => [ 'weight' => 0.15, 'score' => $qc_score ],
+            'db_ratio'       => [ 'weight' => 0.15, 'score' => $db_ratio_score ],
+            'slow_callbacks' => [ 'weight' => 0.15, 'score' => $cb_score ],
+        ], $trace );
+
+        $overall = 0.0;
+        foreach ( $computed_factors as $f ) {
+            $overall += $f['score'] * $f['weight'];
+        }
+        $overall = max( 0, min( 100, (int) round( $overall ) ) );
 
         $grade_info = self::grade($overall);
 

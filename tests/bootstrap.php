@@ -49,6 +49,11 @@ if (! function_exists('esc_js')) {
         return addslashes($text);
     }
 }
+if ( ! function_exists( 'apply_filters' ) ) {
+    function apply_filters( $tag, $value ) {
+        return $value;
+    }
+}
 
 // If running integration suite, load WordPress test framework
 $is_integration = getenv('WP_TESTS_DIR') !== false;
