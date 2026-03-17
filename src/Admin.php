@@ -836,23 +836,6 @@ class Admin
         }
         echo '</div>';
 
-        // Color legend
-        echo '<div class="wp-flame-legend">';
-        $legend_items = [
-            ['color' => '#6c7086', 'label' => __('Core', 'wp-flame')],
-            ['color' => '#7c3aed', 'label' => __('Plugins', 'wp-flame')],
-            ['color' => '#22c55e', 'label' => __('Theme', 'wp-flame')],
-            ['color' => '#ef4444', 'label' => __('Database', 'wp-flame')],
-            ['color' => '#f59e0b', 'label' => __('External HTTP', 'wp-flame')],
-        ];
-        foreach ($legend_items as $item) {
-            echo '<span class="wp-flame-legend-item">';
-            echo '<span class="wp-flame-legend-color" style="background:' . esc_attr($item['color']) . '"></span>';
-            echo esc_html($item['label']);
-            echo '</span>';
-        }
-        echo '</div>';
-
         // Score Breakdown section
         echo '<div class="wp-flame-score-breakdown">';
         echo '<h3>' . esc_html__('Score Breakdown', 'wp-flame') . '</h3>';
@@ -885,6 +868,23 @@ class Admin
                 echo '</p></div>';
             }
         }
+
+        // Color legend
+        echo '<div class="wp-flame-legend">';
+        $legend_items = [
+            ['color' => '#6c7086', 'label' => __('Core', 'wp-flame')],
+            ['color' => '#7c3aed', 'label' => __('Plugins', 'wp-flame')],
+            ['color' => '#22c55e', 'label' => __('Theme', 'wp-flame')],
+            ['color' => '#ef4444', 'label' => __('Database', 'wp-flame')],
+            ['color' => '#f59e0b', 'label' => __('External HTTP', 'wp-flame')],
+        ];
+        foreach ($legend_items as $item) {
+            echo '<span class="wp-flame-legend-item">';
+            echo '<span class="wp-flame-legend-color" style="background:' . esc_attr($item['color']) . '"></span>';
+            echo esc_html($item['label']);
+            echo '</span>';
+        }
+        echo '</div>';
 
         // Flame graph container
         echo '<div id="wp-flame-breadcrumbs"></div>';
