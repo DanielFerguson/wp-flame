@@ -389,14 +389,14 @@ function wp_flame_shutdown(): void {
     }
 
     // User identity
-    $request_meta['user_id'] = function_exists( 'get_current_user_id' ) ? get_current_user_id() : 0;
+    $user_id = function_exists( 'get_current_user_id' ) ? get_current_user_id() : 0;
     $request_meta['user_agent'] = isset( $_SERVER['HTTP_USER_AGENT'] )
         ? substr( sanitize_text_field( wp_unslash( $_SERVER['HTTP_USER_AGENT'] ) ), 0, 500 )
         : '';
 
     // IP address (if tracking enabled)
-    $track_ips = get_option( 'wp_flame_track_ips', true );
-    $request_meta['ip_address'] = $track_ips ? wp_flame_get_client_ip() : '';
+    $track_ips  = get_option( 'wp_flame_track_ips', true );
+    $ip_address = $track_ips ? wp_flame_get_client_ip() : '';
 
     // Step 4: Build trace
     $trace = $collector->get_trace( $request_meta );
@@ -406,7 +406,7 @@ function wp_flame_shutdown(): void {
 
     // If force-trace, store the trace ID for admin notice
     if ( $force_trace && function_exists( 'set_transient' ) ) {
-        set_transient( 'wp_flame_last_force_trace_' . get_current_user_id(), $trace->id, 60 );
+        set_transient( 'wp_flame_last_force_trace_' . $user_id, $trace->id, 60 );
     }
 
     // Step 5: Stop collector (prevents self-instrumentation during save)
@@ -415,12 +415,7 @@ function wp_flame_shutdown(): void {
     // Step 6: Save trace
     global $wpdb;
     $storage = new WPFlame\Storage( $wpdb );
-    $storage->save_trace(
-        $trace,
-        $score_result['score'],
-        (int) ( $request_meta['user_id'] ?? 0 ),
-        (string) ( $request_meta['ip_address'] ?? '' )
-    );
+    $storage->save_trace( $trace, $score_result['score'], $user_id, $ip_address );
 
     // Step 7: Check performance budget thresholds
     $budget_max_ms      = (int) get_option( 'wp_flame_budget_max_ms', 500 );

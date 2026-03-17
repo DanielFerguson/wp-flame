@@ -815,7 +815,7 @@ class Admin
 
         // Request context: user, IP, user agent
         echo '<div class="wp-flame-request-context">';
-        $ctx_user_id = (int) ($trace->meta['user_id'] ?? 0);
+        $ctx_user_id = (int) ($trace->meta['_row_user_id'] ?? 0);
         if ($ctx_user_id > 0 && function_exists('get_userdata')) {
             $ctx_user = get_userdata($ctx_user_id);
             if ($ctx_user) {
@@ -827,7 +827,7 @@ class Admin
         } else {
             echo '<span>' . esc_html__('User:', 'wp-flame') . ' ' . esc_html__('Anonymous', 'wp-flame') . '</span>';
         }
-        $ctx_ip = $trace->meta['ip_address'] ?? '';
+        $ctx_ip = $trace->meta['_row_ip_address'] ?? '';
         if ($ctx_ip) {
             echo '<span>' . esc_html__('IP:', 'wp-flame') . ' <strong>' . esc_html($ctx_ip) . '</strong></span>';
         }

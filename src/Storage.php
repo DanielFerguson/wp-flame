@@ -100,25 +100,34 @@ class Storage
         }
     }
 
-    public function get_trace(string $trace_id): ?Trace
+    public function get_trace( string $trace_id ): ?Trace
     {
         $row = $this->wpdb->get_row(
             $this->wpdb->prepare(
-                "SELECT trace_data FROM {$this->table} WHERE trace_id = %s",
+                "SELECT trace_data, user_id, ip_address, score, created_at FROM {$this->table} WHERE trace_id = %s",
                 $trace_id
             )
         );
 
-        if (! $row) {
+        if ( ! $row || empty( $row->trace_data ) ) {
             return null;
         }
 
-        $data = json_decode($row->trace_data, true);
-        if (! is_array($data)) {
+        $data = json_decode( $row->trace_data, true );
+        if ( ! is_array( $data ) ) {
+            error_log( 'WP Flame: Failed to decode trace ' . $trace_id . ': ' . json_last_error_msg() );
             return null;
         }
 
-        return Trace::fromArray($data);
+        $trace = Trace::fromArray( $data );
+
+        // Attach row-level columns that are NOT stored in trace_data JSON.
+        $trace->meta['_row_user_id']    = (int) $row->user_id;
+        $trace->meta['_row_ip_address'] = (string) $row->ip_address;
+        $trace->meta['_row_score']      = $row->score !== null ? (int) $row->score : null;
+        $trace->meta['_row_created_at'] = (string) $row->created_at;
+
+        return $trace;
     }
 
     /**
