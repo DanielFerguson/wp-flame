@@ -10,7 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class Storage
 {
-    const SCHEMA_VERSION = 1;
+    const SCHEMA_VERSION = 2;
 
     private \wpdb $wpdb;
     private string $table;
@@ -29,6 +29,7 @@ class Storage
             id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
             trace_id char(36) NOT NULL,
             url varchar(2048) NOT NULL DEFAULT '',
+            url_path varchar(2048) NOT NULL DEFAULT '',
             method varchar(10) NOT NULL DEFAULT '',
             total_ms float NOT NULL DEFAULT 0,
             query_count int unsigned NOT NULL DEFAULT 0,
@@ -40,7 +41,10 @@ class Storage
             trace_data longtext NOT NULL,
             PRIMARY KEY  (id),
             UNIQUE KEY trace_id (trace_id),
+            KEY url_path (url_path(191)),
             KEY created_at (created_at),
+            KEY created_total (created_at, total_ms),
+            KEY created_queries (created_at, query_count),
             KEY user_id (user_id),
             KEY ip_address (ip_address)
         ) {$charset};";
@@ -59,7 +63,10 @@ class Storage
             return;
         }
 
-        $this->create_table();
+        if ( $current < 2 ) {
+            $this->create_table();
+            $this->wpdb->query( "UPDATE {$this->table} SET url_path = SUBSTRING_INDEX(url, '?', 1) WHERE url_path = ''" );
+        }
 
         update_option( 'wp_flame_schema_version', self::SCHEMA_VERSION );
     }
@@ -75,9 +82,12 @@ class Storage
             }
         }
 
+        $url_path = explode( '?', $trace->url, 2 )[0];
+
         $data    = [
             'trace_id'    => $trace->id,
             'url'         => $trace->url,
+            'url_path'    => $url_path,
             'method'      => $trace->method,
             'total_ms'    => $trace->total_ms,
             'query_count' => $trace->query_count,
@@ -87,7 +97,7 @@ class Storage
             'ip_address'  => $ip_address,
             'trace_data'  => $json,
         ];
-        $formats = [ '%s', '%s', '%s', '%f', '%d', '%d', '%s', '%d', '%s', '%s' ];
+        $formats = [ '%s', '%s', '%s', '%s', '%f', '%d', '%d', '%s', '%d', '%s', '%s' ];
 
         if ( $score !== null ) {
             $data['score'] = $score;
@@ -316,9 +326,9 @@ class Storage
     {
         // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name is safe
         $results = $this->wpdb->get_results($this->wpdb->prepare(
-            "SELECT SUBSTRING_INDEX(url, '?', 1) as page_url, AVG(total_ms) as avg_ms, COUNT(*) as hits
+            "SELECT url_path as page_url, AVG(total_ms) as avg_ms, COUNT(*) as hits
              FROM `{$this->table}` WHERE created_at >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL %d DAY)
-             GROUP BY page_url ORDER BY avg_ms DESC LIMIT %d",
+             GROUP BY url_path ORDER BY avg_ms DESC LIMIT %d",
             $days, $limit
         ), ARRAY_A);
 
@@ -472,7 +482,7 @@ class Storage
             "SELECT AVG(total_ms) as avg_ms, MIN(total_ms) as min_ms, MAX(total_ms) as max_ms,
                     AVG(query_count) as avg_queries, COUNT(*) as count
              FROM `{$this->table}`
-             WHERE SUBSTRING_INDEX(url, '?', 1) = %s
+             WHERE url_path = %s
                AND created_at >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL %d DAY)",
             $route, $days
         ));
