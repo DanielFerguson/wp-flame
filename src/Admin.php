@@ -147,7 +147,7 @@ class Admin
         echo '<div class="tablenav top"><div class="alignleft">';
         echo '<input type="search" name="s" value="' . esc_attr($filters['url'] ?? '') . '" placeholder="' . esc_attr__('Filter by URL...', 'wp-flame') . '">';
         $current_method = $filters['method'] ?? '';
-        echo ' <select name="method" style="vertical-align:middle">';
+        echo ' <select name="method" style="height:30px;vertical-align:top">';
         echo '<option value="">' . esc_html__('All Methods', 'wp-flame') . '</option>';
         foreach (['GET', 'POST', 'PUT', 'DELETE', 'PATCH'] as $m) {
             echo '<option value="' . esc_attr($m) . '"' . selected($current_method, $m, false) . '>' . esc_html($m) . '</option>';
