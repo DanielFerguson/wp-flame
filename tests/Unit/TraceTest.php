@@ -123,6 +123,29 @@ class TraceTest extends TestCase
         $this->assertSame(5, $reconstructed->meta['cache_misses']);
     }
 
+    public function test_to_array_includes_schema_version(): void
+    {
+        $trace = new Trace(
+            'test-id', '/test', 'GET', '2024-01-01T00:00:00Z',
+            100.0, 1024, '8.1', '6.4', [], []
+        );
+        $arr = $trace->toArray();
+        $this->assertArrayHasKey('v', $arr);
+        $this->assertSame(1, $arr['v']);
+    }
+
+    public function test_from_array_handles_missing_version(): void
+    {
+        $data = [
+            'id' => 'test-id', 'url' => '/test', 'method' => 'GET',
+            'timestamp' => '2024-01-01T00:00:00Z', 'total_ms' => 100.0,
+            'peak_memory' => 1024, 'php_version' => '8.1', 'wp_version' => '6.4',
+            'spans' => [], 'meta' => [],
+        ];
+        $trace = Trace::fromArray($data);
+        $this->assertSame('test-id', $trace->id);
+    }
+
     public function test_from_array_round_trip(): void
     {
         $spans = [

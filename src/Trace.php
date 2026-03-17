@@ -64,6 +64,7 @@ class Trace
     public function toArray(): array
     {
         return [
+            'v'              => 1,
             'id'             => $this->id,
             'url'            => $this->url,
             'method'         => $this->method,
@@ -81,6 +82,9 @@ class Trace
 
     public static function fromArray(array $data): self
     {
+        $version = isset( $data['v'] ) ? (int) $data['v'] : 1;
+        // Future: if ( $version < 2 ) { $data = self::migrate_v1_to_v2( $data ); }
+
         $spans = array_map(
             fn(array $s) => Span::fromArray($s),
             $data['spans'] ?? []
