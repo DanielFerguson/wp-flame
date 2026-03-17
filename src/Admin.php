@@ -65,7 +65,8 @@ class Admin
         $trace_id = sanitize_text_field(wp_unslash($_POST['wp_flame_delete_trace']));
         $this->storage->delete_trace($trace_id);
 
-        wp_safe_redirect(admin_url('tools.php?page=wp-flame&deleted=1'));
+        set_transient('wp_flame_deleted_' . get_current_user_id(), true, 30);
+        wp_safe_redirect(admin_url('tools.php?page=wp-flame'));
         exit;
     }
 
@@ -92,8 +93,11 @@ class Admin
 
         echo '<div class="wrap">';
         echo '<h1>WP Flame</h1>';
+        echo '<p><a href="' . esc_url(admin_url('options-general.php?page=wp-flame-settings')) . '">Settings</a></p>';
 
-        if (isset($_GET['deleted'])) {
+        $deleted_key = 'wp_flame_deleted_' . get_current_user_id();
+        if (get_transient($deleted_key)) {
+            delete_transient($deleted_key);
             echo '<div class="notice notice-success is-dismissible"><p>Trace deleted.</p></div>';
         }
 

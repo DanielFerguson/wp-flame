@@ -198,7 +198,8 @@ class Settings
 
         $this->storage->purge_all();
 
-        wp_safe_redirect(add_query_arg('purged', '1', admin_url('options-general.php?page=wp-flame-settings')));
+        set_transient('wp_flame_purged_' . get_current_user_id(), true, 30);
+        wp_safe_redirect(admin_url('options-general.php?page=wp-flame-settings'));
         exit;
     }
 
@@ -216,7 +217,9 @@ class Settings
 
         settings_errors('wp_flame_settings');
 
-        if (isset($_GET['purged'])) {
+        $purged_key = 'wp_flame_purged_' . get_current_user_id();
+        if (get_transient($purged_key)) {
+            delete_transient($purged_key);
             echo '<div class="notice notice-success is-dismissible"><p>All traces have been purged.</p></div>';
         }
 

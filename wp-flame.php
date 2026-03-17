@@ -181,11 +181,16 @@ function wp_flame_init(): void {
             'id'    => 'wp-flame-trace',
             'title' => '🔥 Trace This Page',
             'href'  => '#',
-            'meta'  => [
-                'onclick' => "document.cookie='wp_flame_force_trace=1;path=/';location.reload();return false;",
-            ],
         ] );
     }, 999 );
+
+    // Enqueue admin bar JS on frontend (avoids inline onclick blocked by CSP)
+    add_action( 'wp_enqueue_scripts', function () {
+        if ( ! current_user_can( 'manage_options' ) || ! is_admin_bar_showing() ) {
+            return;
+        }
+        wp_enqueue_script( 'wp-flame-admin-bar', WP_FLAME_URL . 'assets/js/admin-bar.js', [], WP_FLAME_VERSION, true );
+    } );
 
     // Admin notice for force-traced pages
     add_action( 'admin_notices', function () {

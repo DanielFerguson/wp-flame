@@ -56,6 +56,7 @@ class CallbackWrapper
             ['hook' => $this->hook_name, 'priority' => $this->priority]
         );
 
+        $result = null;
         try {
             $result = call_user_func_array($this->original, $args);
         } finally {
