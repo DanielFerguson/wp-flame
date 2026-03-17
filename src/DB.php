@@ -91,33 +91,6 @@ class DB extends \wpdb
      */
     private function get_caller_source(): string
     {
-        $trace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 15);
-        $wp_flame_dir = dirname(__DIR__);
-
-        foreach ($trace as $frame) {
-            if (! isset($frame['file'])) {
-                continue;
-            }
-
-            $file = $frame['file'];
-
-            // Skip wp-includes, wp-admin, and our own plugin
-            if (defined('ABSPATH')) {
-                if (strpos($file, ABSPATH . 'wp-includes/') === 0) {
-                    continue;
-                }
-                if (strpos($file, ABSPATH . 'wp-admin/') === 0) {
-                    continue;
-                }
-            }
-            if (strpos($file, $wp_flame_dir) === 0) {
-                continue;
-            }
-
-            $source = $this->collector->get_source_from_file($file);
-            return $source['source'];
-        }
-
-        return 'wordpress';
+        return SourceResolver::from_backtrace( $this->collector, 1 );
     }
 }

@@ -177,35 +177,10 @@ class GraphQL
     }
 
     /**
-     * Determine query source via backtrace (same pattern as DB::get_caller_source()).
+     * Determine query source via backtrace.
      */
-    private function get_caller_source(array $backtrace): string
+    private function get_caller_source( array $backtrace ): string
     {
-        $wp_flame_dir = dirname(__DIR__);
-
-        foreach ($backtrace as $frame) {
-            if (! isset($frame['file'])) {
-                continue;
-            }
-
-            $file = $frame['file'];
-
-            if (defined('ABSPATH')) {
-                if (strpos($file, ABSPATH . 'wp-includes/') === 0) {
-                    continue;
-                }
-                if (strpos($file, ABSPATH . 'wp-admin/') === 0) {
-                    continue;
-                }
-            }
-            if (strpos($file, $wp_flame_dir) === 0) {
-                continue;
-            }
-
-            $source = $this->collector->get_source_from_file($file);
-            return $source['source'];
-        }
-
-        return 'wordpress';
+        return SourceResolver::from_trace_array( $this->collector, $backtrace );
     }
 }
