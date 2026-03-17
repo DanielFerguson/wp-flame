@@ -51,6 +51,16 @@
     font-size: 13px;
 }
 
+/* Request context (user, IP, user agent in flame graph view) */
+.wp-flame-request-context {
+    display: flex;
+    gap: 24px;
+    margin: 8px 0;
+    font-size: 13px;
+    color: #646970;
+    flex-wrap: wrap;
+}
+
 /* Color legend */
 .wp-flame-legend {
     display: flex;

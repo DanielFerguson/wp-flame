@@ -98,6 +98,12 @@ class Admin
                 $filters['url'] = 'wp-json';
             }
         }
+        if (isset($_GET['user_id']) && $_GET['user_id'] !== '') {
+            $filters['user_id'] = (int) wp_unslash($_GET['user_id']);
+        }
+        if (! empty($_GET['ip_address'])) {
+            $filters['ip_address'] = sanitize_text_field(wp_unslash($_GET['ip_address']));
+        }
         if (! empty($_GET['orderby'])) {
             $filters['orderby'] = sanitize_text_field(wp_unslash($_GET['orderby']));
         }
@@ -151,6 +157,39 @@ class Admin
             echo '</p></div>';
         }
 
+        if (isset($filters['user_id'])) {
+            $clear_url   = admin_url('tools.php?page=wp-flame');
+            $user_label  = esc_html((string) $filters['user_id']);
+            if ($filters['user_id'] === 0) {
+                $user_label = esc_html__('Anonymous', 'wp-flame');
+            } elseif (function_exists('get_userdata')) {
+                $filter_user = get_userdata($filters['user_id']);
+                if ($filter_user) {
+                    $user_label = esc_html($filter_user->display_name);
+                }
+            }
+            echo '<div class="notice notice-info inline" style="margin:8px 0"><p>';
+            /* translators: %s: user display name or ID */
+            echo wp_kses_post(sprintf(
+                __('Showing traces for user <strong>%s</strong>.', 'wp-flame'),
+                $user_label
+            ));
+            echo ' <a href="' . esc_url($clear_url) . '">' . esc_html__('Clear filter', 'wp-flame') . '</a>';
+            echo '</p></div>';
+        }
+
+        if (! empty($filters['ip_address'])) {
+            $clear_url = admin_url('tools.php?page=wp-flame');
+            echo '<div class="notice notice-info inline" style="margin:8px 0"><p>';
+            /* translators: %s: IP address */
+            echo wp_kses_post(sprintf(
+                __('Showing traces from IP <strong>%s</strong>.', 'wp-flame'),
+                esc_html($filters['ip_address'])
+            ));
+            echo ' <a href="' . esc_url($clear_url) . '">' . esc_html__('Clear filter', 'wp-flame') . '</a>';
+            echo '</p></div>';
+        }
+
         // Search/filter form
         echo '<form method="get">';
         echo '<input type="hidden" name="page" value="wp-flame">';
@@ -196,6 +235,8 @@ class Admin
         echo '<thead><tr>';
         echo '<th>' . esc_html__('URL', 'wp-flame') . '</th>';
         echo '<th>' . esc_html__('Method', 'wp-flame') . '</th>';
+        echo '<th>' . esc_html__('User', 'wp-flame') . '</th>';
+        echo '<th>' . esc_html__('IP', 'wp-flame') . '</th>';
 
         foreach ($sortable_columns as $col => $label) {
             $is_active  = ($current_orderby === $col);
@@ -209,7 +250,7 @@ class Admin
         echo '</tr></thead><tbody>';
 
         if (empty($traces)) {
-            echo '<tr><td colspan="8">' . esc_html__('No traces found. Browse your site as an admin to generate traces.', 'wp-flame') . '</td></tr>';
+            echo '<tr><td colspan="10">' . esc_html__('No traces found. Browse your site as an admin to generate traces.', 'wp-flame') . '</td></tr>';
         }
 
         foreach ($traces as $row) {
@@ -217,9 +258,37 @@ class Admin
             $view_url = admin_url('tools.php?page=wp-flame&trace_id=' . urlencode($row['trace_id']));
             $mem_mb   = round((int) $row['peak_memory'] / 1048576, 1);
 
+            // Resolve user display info
+            $row_user_id = (int) ($row['user_id'] ?? 0);
+            if ($row_user_id > 0 && function_exists('get_userdata')) {
+                $row_user = get_userdata($row_user_id);
+                if ($row_user) {
+                    $row_user_roles = implode(', ', $row_user->roles);
+                    $user_filter_url = add_query_arg(['page' => 'wp-flame', 'user_id' => $row_user_id], admin_url('tools.php'));
+                    $user_cell = '<a href="' . esc_url($user_filter_url) . '">' . esc_html($row_user->display_name) . '</a> <span style="color:#999">(' . esc_html($row_user_roles) . ')</span>';
+                } else {
+                    $user_filter_url = add_query_arg(['page' => 'wp-flame', 'user_id' => $row_user_id], admin_url('tools.php'));
+                    $user_cell = '<a href="' . esc_url($user_filter_url) . '">#' . esc_html((string) $row_user_id) . '</a>';
+                }
+            } else {
+                $user_filter_url = add_query_arg(['page' => 'wp-flame', 'user_id' => 0], admin_url('tools.php'));
+                $user_cell = '<a href="' . esc_url($user_filter_url) . '">' . esc_html__('Anonymous', 'wp-flame') . '</a>';
+            }
+
+            // Resolve IP display info
+            $row_ip = (string) ($row['ip_address'] ?? '');
+            if ($row_ip !== '') {
+                $ip_filter_url = add_query_arg(['page' => 'wp-flame', 'ip_address' => $row_ip], admin_url('tools.php'));
+                $ip_cell = '<a href="' . esc_url($ip_filter_url) . '">' . esc_html($row_ip) . '</a>';
+            } else {
+                $ip_cell = '&mdash;';
+            }
+
             echo $is_slow ? '<tr class="wp-flame-slow">' : '<tr>';
             echo '<td><a href="' . esc_url($view_url) . '">' . esc_html($row['url']) . '</a></td>';
             echo '<td>' . esc_html($row['method']) . '</td>';
+            echo '<td>' . wp_kses_post($user_cell) . '</td>';
+            echo '<td>' . wp_kses_post($ip_cell) . '</td>';
             if ($row['score'] !== null) {
                 $badge_grade = Score::grade((int) $row['score']);
                 echo '<td><span class="wp-flame-score-badge" style="background:' . esc_attr($badge_grade['color']) . '">' . esc_html((string) $row['score']) . '</span></td>';
@@ -554,6 +623,30 @@ class Admin
         echo '<div class="wp-flame-stat-right">';
         echo esc_html($trace->method) . ' ' . esc_html($trace->url) . ' &mdash; ' . esc_html(round($trace->total_ms)) . 'ms';
         echo '</div>';
+        echo '</div>';
+
+        // Request context: user, IP, user agent
+        echo '<div class="wp-flame-request-context">';
+        $ctx_user_id = (int) ($trace->meta['user_id'] ?? 0);
+        if ($ctx_user_id > 0 && function_exists('get_userdata')) {
+            $ctx_user = get_userdata($ctx_user_id);
+            if ($ctx_user) {
+                $ctx_roles = implode(', ', $ctx_user->roles);
+                echo '<span>' . esc_html__('User:', 'wp-flame') . ' <strong>' . esc_html($ctx_user->display_name) . '</strong> (' . esc_html($ctx_roles) . ')</span>';
+            } else {
+                echo '<span>' . esc_html__('User:', 'wp-flame') . ' ' . esc_html__('Anonymous', 'wp-flame') . '</span>';
+            }
+        } else {
+            echo '<span>' . esc_html__('User:', 'wp-flame') . ' ' . esc_html__('Anonymous', 'wp-flame') . '</span>';
+        }
+        $ctx_ip = $trace->meta['ip_address'] ?? '';
+        if ($ctx_ip) {
+            echo '<span>' . esc_html__('IP:', 'wp-flame') . ' <strong>' . esc_html($ctx_ip) . '</strong></span>';
+        }
+        $ctx_ua = $trace->meta['user_agent'] ?? '';
+        if ($ctx_ua) {
+            echo '<span>' . esc_html__('User Agent:', 'wp-flame') . ' ' . esc_html($ctx_ua) . '</span>';
+        }
         echo '</div>';
 
         // Color legend
