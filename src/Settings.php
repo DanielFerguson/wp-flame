@@ -240,7 +240,7 @@ class Settings
         echo '<input type="checkbox" name="wp_flame_full_query_text" value="1" ' . checked($value, true, false) . '>';
         echo ' ' . esc_html__('Record full SQL query text', 'wp-flame');
         echo '</label>';
-        echo '<p class="description">' . esc_html__('When enabled, the complete SQL query is stored with each trace. This may increase storage usage.', 'wp-flame') . '</p>';
+        echo '<p class="description">' . esc_html__('When enabled, the complete SQL query is stored with each trace. This may increase storage usage. <strong>Privacy notice:</strong> full query text may contain personal data (email addresses, usernames, etc.) embedded in query values. Enable only in development or with appropriate data handling policies.', 'wp-flame') . '</p>';
     }
 
     public function render_field_track_ips(): void
