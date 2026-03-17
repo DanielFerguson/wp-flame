@@ -85,6 +85,15 @@ class Admin
         if (isset($_GET['max_duration']) && $_GET['max_duration'] !== '') {
             $filters['max_duration'] = (float) wp_unslash($_GET['max_duration']);
         }
+        if (! empty($_GET['method'])) {
+            $filters['method'] = sanitize_text_field(wp_unslash($_GET['method']));
+        }
+        if (! empty($_GET['orderby'])) {
+            $filters['orderby'] = sanitize_text_field(wp_unslash($_GET['orderby']));
+        }
+        if (! empty($_GET['order'])) {
+            $filters['order'] = sanitize_text_field(wp_unslash($_GET['order']));
+        }
 
         $paged    = max(1, (int) wp_unslash($_GET['paged'] ?? 1));
         $per_page = 20;
@@ -137,20 +146,47 @@ class Admin
         echo '<input type="hidden" name="page" value="wp-flame">';
         echo '<div class="tablenav top"><div class="alignleft">';
         echo '<input type="search" name="s" value="' . esc_attr($filters['url'] ?? '') . '" placeholder="' . esc_attr__('Filter by URL...', 'wp-flame') . '">';
+        $current_method = $filters['method'] ?? '';
+        echo ' <select name="method" style="vertical-align:middle">';
+        echo '<option value="">' . esc_html__('All Methods', 'wp-flame') . '</option>';
+        foreach (['GET', 'POST', 'PUT', 'DELETE', 'PATCH'] as $m) {
+            echo '<option value="' . esc_attr($m) . '"' . selected($current_method, $m, false) . '>' . esc_html($m) . '</option>';
+        }
+        echo '</select>';
         echo ' <input type="number" name="min_duration" value="' . esc_attr(isset($filters['min_duration']) ? (string) $filters['min_duration'] : '') . '" placeholder="' . esc_attr__('Min ms...', 'wp-flame') . '" step="any" style="width:100px">';
         echo ' <input type="submit" class="button" value="' . esc_attr__('Filter', 'wp-flame') . '">';
         echo '</div></div>';
         echo '</form>';
 
-        // Table
+        // Table with sortable columns
+        $current_orderby = $filters['orderby'] ?? 'created_at';
+        $current_order   = strtoupper($filters['order'] ?? 'DESC');
+        $base_args       = ['page' => 'wp-flame'];
+        if (! empty($filters['url'])) $base_args['s'] = $filters['url'];
+        if (! empty($filters['method'])) $base_args['method'] = $filters['method'];
+        if (isset($filters['min_duration'])) $base_args['min_duration'] = $filters['min_duration'];
+        if (isset($filters['max_duration'])) $base_args['max_duration'] = $filters['max_duration'];
+
+        $sortable_columns = [
+            'total_ms'    => __('Duration', 'wp-flame'),
+            'query_count' => __('Queries', 'wp-flame'),
+            'peak_memory' => __('Memory', 'wp-flame'),
+            'created_at'  => __('Date', 'wp-flame'),
+        ];
+
         echo '<table class="widefat striped wp-flame-traces">';
         echo '<thead><tr>';
         echo '<th>' . esc_html__('URL', 'wp-flame') . '</th>';
         echo '<th>' . esc_html__('Method', 'wp-flame') . '</th>';
-        echo '<th>' . esc_html__('Duration', 'wp-flame') . '</th>';
-        echo '<th>' . esc_html__('Queries', 'wp-flame') . '</th>';
-        echo '<th>' . esc_html__('Memory', 'wp-flame') . '</th>';
-        echo '<th>' . esc_html__('Date', 'wp-flame') . '</th>';
+
+        foreach ($sortable_columns as $col => $label) {
+            $is_active  = ($current_orderby === $col);
+            $next_order = ($is_active && $current_order === 'DESC') ? 'ASC' : 'DESC';
+            $sort_url   = add_query_arg(array_merge($base_args, ['orderby' => $col, 'order' => $next_order]), admin_url('tools.php'));
+            $arrow      = $is_active ? ($current_order === 'DESC' ? ' ▾' : ' ▴') : '';
+            echo '<th><a href="' . esc_url($sort_url) . '" style="text-decoration:none;color:inherit">' . esc_html($label) . $arrow . '</a></th>';
+        }
+
         echo '<th>' . esc_html__('Actions', 'wp-flame') . '</th>';
         echo '</tr></thead><tbody>';
 

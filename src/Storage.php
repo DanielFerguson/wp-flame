@@ -114,14 +114,23 @@ class Storage
             $params[] = $filters['before'];
         }
 
+        if (! empty($filters['method'])) {
+            $where  .= ' AND method = %s';
+            $params[] = $filters['method'];
+        }
+
         $per_page = (int) ($filters['per_page'] ?? 20);
         $page     = max(1, (int) ($filters['page'] ?? 1));
         $offset   = ($page - 1) * $per_page;
 
+        $allowed_orderby = ['created_at', 'total_ms', 'query_count', 'peak_memory'];
+        $orderby = in_array($filters['orderby'] ?? '', $allowed_orderby, true) ? $filters['orderby'] : 'created_at';
+        $order   = strtoupper($filters['order'] ?? '') === 'ASC' ? 'ASC' : 'DESC';
+
         $sql = "SELECT trace_id, url, method, total_ms, query_count, peak_memory, created_at
                 FROM {$this->table}
                 WHERE {$where}
-                ORDER BY created_at DESC
+                ORDER BY {$orderby} {$order}
                 LIMIT %d OFFSET %d";
 
         $params[] = $per_page;
@@ -161,6 +170,11 @@ class Storage
         if (! empty($filters['before'])) {
             $where  .= ' AND created_at <= %s';
             $params[] = $filters['before'];
+        }
+
+        if (! empty($filters['method'])) {
+            $where  .= ' AND method = %s';
+            $params[] = $filters['method'];
         }
 
         $sql = "SELECT COUNT(*) FROM {$this->table} WHERE {$where}";
