@@ -495,6 +495,121 @@ class InsightsTest extends TestCase
     }
 
     // ---------------------------------------------------------------------------
+    // analyze_dashboard() — abuse detection rules
+    // ---------------------------------------------------------------------------
+
+    public function test_high_request_rate_above_100_produces_warning(): void
+    {
+        $top_ips = [
+            ['ip_address' => '203.0.113.45', 'request_count' => 412, 'avg_ms' => 1720.0, 'total_ms' => 708640.0],
+        ];
+
+        $insights = Insights::analyze_dashboard([], $top_ips, []);
+
+        $matches = array_filter($insights, fn($i) => str_contains($i['title'], '203.0.113.45'));
+        $matches = array_values($matches);
+
+        $this->assertCount(1, $matches);
+        $this->assertSame('warning', $matches[0]['severity']);
+        $this->assertStringContainsString('412', $matches[0]['title']);
+        $this->assertStringContainsString('scraping', $matches[0]['detail']);
+    }
+
+    public function test_high_request_rate_at_threshold_does_not_trigger(): void
+    {
+        $top_ips = [
+            ['ip_address' => '10.0.0.1', 'request_count' => 100, 'avg_ms' => 200.0, 'total_ms' => 20000.0],
+        ];
+
+        $insights = Insights::analyze_dashboard([], $top_ips, []);
+
+        $matches = array_filter($insights, fn($i) => str_contains($i['title'], '10.0.0.1'));
+        $this->assertEmpty($matches);
+    }
+
+    public function test_high_resource_consumer_above_60s_produces_warning(): void
+    {
+        $top_users = [
+            ['user_id' => 0, 'request_count' => 347, 'avg_ms' => 1850.0, 'total_ms' => 641950.0],
+        ];
+
+        $insights = Insights::analyze_dashboard($top_users, [], []);
+
+        $matches = array_filter($insights, fn($i) => str_contains($i['detail'], 'significant server load'));
+        $matches = array_values($matches);
+
+        $this->assertCount(1, $matches);
+        $this->assertSame('warning', $matches[0]['severity']);
+        $this->assertStringContainsString('347', $matches[0]['title']);
+    }
+
+    public function test_high_resource_consumer_at_threshold_does_not_trigger(): void
+    {
+        $top_users = [
+            ['user_id' => 0, 'request_count' => 50, 'avg_ms' => 1200.0, 'total_ms' => 60000.0],
+        ];
+
+        $insights = Insights::analyze_dashboard($top_users, [], []);
+
+        $matches = array_filter($insights, fn($i) => str_contains($i['detail'], 'significant server load'));
+        $this->assertEmpty($matches);
+    }
+
+    public function test_no_abuse_with_normal_data_returns_empty(): void
+    {
+        $top_users = [
+            ['user_id' => 0, 'request_count' => 20, 'avg_ms' => 150.0, 'total_ms' => 3000.0],
+        ];
+        $top_ips = [
+            ['ip_address' => '192.168.1.1', 'request_count' => 20, 'avg_ms' => 150.0, 'total_ms' => 3000.0],
+        ];
+        $traces = [
+            ['url' => '/wp-json/wp/v2/posts?page=1', 'ip_address' => '192.168.1.1'],
+            ['url' => '/wp-json/wp/v2/posts?page=2', 'ip_address' => '192.168.1.1'],
+        ];
+
+        $insights = Insights::analyze_dashboard($top_users, $top_ips, $traces);
+
+        // No rule should fire: request count ≤ 100, total_ms ≤ 60000, pages < 3
+        $this->assertEmpty($insights);
+    }
+
+    public function test_sequential_api_pagination_produces_warning(): void
+    {
+        $traces = [
+            ['url' => '/wp-json/wc/v3/customers?page=1', 'ip_address' => '203.0.113.45'],
+            ['url' => '/wp-json/wc/v3/customers?page=2', 'ip_address' => '203.0.113.45'],
+            ['url' => '/wp-json/wc/v3/customers?page=3', 'ip_address' => '203.0.113.45'],
+            ['url' => '/wp-json/wc/v3/customers?page=4', 'ip_address' => '203.0.113.45'],
+            ['url' => '/wp-json/wc/v3/customers?page=5', 'ip_address' => '203.0.113.45'],
+        ];
+
+        $insights = Insights::analyze_dashboard([], [], $traces);
+
+        $matches = array_filter($insights, fn($i) => str_contains($i['title'], 'scraping'));
+        $matches = array_values($matches);
+
+        $this->assertCount(1, $matches);
+        $this->assertSame('warning', $matches[0]['severity']);
+        $this->assertStringContainsString('203.0.113.45', $matches[0]['title']);
+        $this->assertStringContainsString('pages 1-5', $matches[0]['detail']);
+    }
+
+    public function test_sequential_api_pagination_below_threshold_does_not_trigger(): void
+    {
+        // Only 2 sequential pages — not enough
+        $traces = [
+            ['url' => '/wp-json/wp/v2/posts?page=1', 'ip_address' => '10.0.0.5'],
+            ['url' => '/wp-json/wp/v2/posts?page=2', 'ip_address' => '10.0.0.5'],
+        ];
+
+        $insights = Insights::analyze_dashboard([], [], $traces);
+
+        $matches = array_filter($insights, fn($i) => str_contains($i['title'], 'scraping'));
+        $this->assertEmpty($matches);
+    }
+
+    // ---------------------------------------------------------------------------
     // analyze() returns flat merged array from all rules
     // ---------------------------------------------------------------------------
 
