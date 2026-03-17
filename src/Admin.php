@@ -197,6 +197,9 @@ class Admin
         $slowest_page_url = ! empty($slowest_pages) ? $slowest_pages[0]['page_url'] : '—';
         $slowest_page_ms  = ! empty($slowest_pages) ? round((float) $slowest_pages[0]['avg_ms'], 1) : 0;
 
+        // Chart 1 sparkline data
+        $daily = $this->storage->get_daily_avg_ms(7);
+
         // Summary stat cards
         echo '<div class="wp-flame-summary">';
 
@@ -207,6 +210,25 @@ class Admin
             echo '<span class="wp-flame-trend ' . esc_attr($trend_class) . '">' . esc_html($trend) . '</span>';
         } else {
             echo '<span class="wp-flame-trend">' . esc_html($trend) . '</span>';
+        }
+        // Chart 1: Response Time Sparkline
+        if (count($daily) >= 2) {
+            $values = array_map(function ($d) { return (float) $d['avg_ms']; }, $daily);
+            $max    = max($values) ?: 1;
+            $min    = min($values);
+            $w      = 100;
+            $h      = 30;
+            $points = [];
+            $count  = count($values);
+            for ($i = 0; $i < $count; $i++) {
+                $x        = ($i / max(1, $count - 1)) * $w;
+                $y        = $h - (($values[$i] - $min) / max(1, $max - $min)) * ($h - 4) - 2;
+                $points[] = round($x, 1) . ',' . round($y, 1);
+            }
+            $polyline = implode(' ', $points);
+            echo '<svg class="wp-flame-sparkline" width="' . $w . '" height="' . $h . '" viewBox="0 0 ' . $w . ' ' . $h . '">';
+            echo '<polyline points="' . esc_attr($polyline) . '" fill="none" stroke="#7c3aed" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />';
+            echo '</svg>';
         }
         echo '</div>';
 
@@ -231,6 +253,61 @@ class Admin
         echo '</div>';
 
         echo '</div>'; // .wp-flame-summary
+
+        // Chart 2: Time Breakdown Bar
+        $trace_data_blobs = $this->storage->get_recent_trace_data(50);
+        $type_totals      = ['core' => 0.0, 'plugin' => 0.0, 'theme' => 0.0, 'db' => 0.0, 'http' => 0.0];
+
+        foreach ($trace_data_blobs as $blob) {
+            $data = json_decode($blob, true);
+            if (! is_array($data) || empty($data['spans'])) {
+                continue;
+            }
+            foreach ($data['spans'] as $span) {
+                $type = $span['type'] ?? '';
+                if (array_key_exists($type, $type_totals)) {
+                    $type_totals[$type] += (float) ($span['duration_ms'] ?? 0);
+                }
+            }
+        }
+
+        $total_time = array_sum($type_totals) ?: 1;
+
+        $colors = [
+            'core'   => '#6c7086',
+            'plugin' => '#7c3aed',
+            'theme'  => '#22c55e',
+            'db'     => '#ef4444',
+            'http'   => '#f59e0b',
+        ];
+        $labels = [
+            'core'   => __('Core', 'wp-flame'),
+            'plugin' => __('Plugins', 'wp-flame'),
+            'theme'  => __('Theme', 'wp-flame'),
+            'db'     => __('Database', 'wp-flame'),
+            'http'   => __('HTTP', 'wp-flame'),
+        ];
+
+        echo '<div class="wp-flame-breakdown">';
+        echo '<div class="wp-flame-breakdown-bar">';
+        foreach ($type_totals as $type => $ms) {
+            $pct = ($ms / $total_time) * 100;
+            if ($pct < 0.5) {
+                continue;
+            }
+            echo '<div class="wp-flame-breakdown-segment" style="width:' . esc_attr(round($pct, 1)) . '%;background:' . esc_attr($colors[$type] ?? '#999') . '" title="' . esc_attr($labels[$type] ?? $type) . ': ' . esc_attr(round($pct, 1)) . '%"></div>';
+        }
+        echo '</div>';
+        echo '<div class="wp-flame-breakdown-labels">';
+        foreach ($type_totals as $type => $ms) {
+            $pct = ($ms / $total_time) * 100;
+            if ($pct < 1) {
+                continue;
+            }
+            echo '<span class="wp-flame-breakdown-label"><span style="background:' . esc_attr($colors[$type] ?? '#999') . '" class="wp-flame-legend-color"></span>' . esc_html($labels[$type] ?? $type) . ' ' . esc_html(round($pct)) . '%</span>';
+        }
+        echo '</div>';
+        echo '</div>'; // .wp-flame-breakdown
 
         // Slowest callbacks ranking
         $slowest_callbacks = $this->get_slowest_callbacks(5);
@@ -272,6 +349,26 @@ class Admin
             }
         }
         echo '</table>';
+        echo '</div>'; // .wp-flame-ranking
+
+        // Chart 3: Response Time Distribution Histogram
+        $distribution = $this->storage->get_response_time_distribution(7);
+        $max_count    = max(array_column($distribution, 'count')) ?: 1;
+
+        echo '<div class="wp-flame-ranking">';
+        echo '<h3>' . esc_html__('Response Time Distribution', 'wp-flame') . '</h3>';
+        echo '<div class="wp-flame-histogram">';
+        foreach ($distribution as $bucket) {
+            $pct = ($bucket['count'] / $max_count) * 100;
+            echo '<div class="wp-flame-histogram-row">';
+            echo '<span class="wp-flame-histogram-label">' . esc_html($bucket['label']) . '</span>';
+            echo '<div class="wp-flame-histogram-bar-container">';
+            echo '<div class="wp-flame-histogram-bar" style="width:' . esc_attr(round($pct, 1)) . '%"></div>';
+            echo '</div>';
+            echo '<span class="wp-flame-histogram-count">' . esc_html($bucket['count']) . '</span>';
+            echo '</div>';
+        }
+        echo '</div>';
         echo '</div>'; // .wp-flame-ranking
 
         echo '</div>'; // .wp-flame-rankings

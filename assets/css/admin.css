@@ -230,3 +230,79 @@
     display: block;
     margin-top: 2px;
 }
+
+/* Sparkline */
+.wp-flame-sparkline {
+    display: block;
+    margin-top: 4px;
+}
+
+/* Time breakdown bar */
+.wp-flame-breakdown {
+    margin: 12px 0;
+}
+
+.wp-flame-breakdown-bar {
+    display: flex;
+    height: 8px;
+    border-radius: 4px;
+    overflow: hidden;
+    background: #f0f0f0;
+}
+
+.wp-flame-breakdown-segment {
+    transition: width 0.3s;
+}
+
+.wp-flame-breakdown-labels {
+    display: flex;
+    gap: 12px;
+    margin-top: 6px;
+    font-size: 11px;
+    color: #646970;
+}
+
+.wp-flame-breakdown-label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+/* Histogram */
+.wp-flame-histogram-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 4px 0;
+}
+
+.wp-flame-histogram-label {
+    width: 70px;
+    font-size: 11px;
+    color: #646970;
+    text-align: right;
+    flex-shrink: 0;
+}
+
+.wp-flame-histogram-bar-container {
+    flex: 1;
+    height: 16px;
+    background: #f0f0f0;
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.wp-flame-histogram-bar {
+    height: 100%;
+    background: #7c3aed;
+    border-radius: 3px;
+    min-width: 2px;
+    transition: width 0.3s;
+}
+
+.wp-flame-histogram-count {
+    width: 30px;
+    font-size: 11px;
+    color: #646970;
+    flex-shrink: 0;
+}
