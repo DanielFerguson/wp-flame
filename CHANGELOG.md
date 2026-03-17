@@ -6,14 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-03-17
+
 ### Added
 - Request identity tracking: user ID, IP address, and user agent captured on every trace
 - User and IP columns in trace list (clickable to filter)
+- Grade, user, and IP filter dropdowns on the trace list
 - Request context section on flame graph view (User, IP, User Agent)
 - Top Users by Load and Top IPs by Requests dashboard rankings
 - 3 abuse detection insight rules (high request rate, resource hog, API pagination scraping)
 - IP tracking toggle in settings for GDPR compliance
-- Per-route comparison on flame graph ("59% slower than average for this route")
+- Per-route comparison banner on flame graph (now displayed above the stats bar)
 - Response time histogram expanded to 7 buckets (split 500ms+ into 500-1000, 1000-1500, 1500+)
 - Score column is now sortable in the trace list (click to sort by performance score)
 - Full GraphQL instrumentation: WPGraphQL native hooks for resolver timing, DB queries via log_query_custom_data, operation-level spans
@@ -22,9 +25,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - GraphQL type filter in trace list
 - Limited instrumentation badge for non-WPGraphQL GraphQL traces
 
-### Changed
-- Version updated to 1.0.0
-- Author set to Chepstowe Consulting (https://www.chepstowe.consulting)
+### Fixed
+- Duplicate database query insights now consolidated when many distinct queries share the same count and type (e.g. "5 duplicate SELECT queries detected (×17 distinct queries)")
+- API scraping insights consolidated to one card per IP instead of one per endpoint
+- Histogram label wrapping for the 1000-1500ms bucket
 
 ## [1.0.0] - 2026-03-17
 
@@ -174,7 +178,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Transient-based notices (no reflected URL parameter injection)
 
 #### Testing
-- 115 unit tests with 294 assertions
+- 150 unit tests with 396 assertions
 - Test coverage for: Span, Trace, Collector, Storage (schema), CallbackResolver, CallbackWrapper, Http, Insights, Score
 - Dual test suites: `unit` (pure PHP) and `integration` (WordPress test framework)
 - i18n function stubs in test bootstrap
