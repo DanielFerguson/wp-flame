@@ -384,3 +384,12 @@ add_action( 'wp_flame_prune_traces', function () {
     $storage = new WPFlame\Storage( $wpdb );
     $storage->prune_old( $days );
 } );
+
+// WP-CLI commands
+if ( defined( 'WP_CLI' ) && WP_CLI ) {
+    add_action( 'plugins_loaded', function () {
+        global $wpdb;
+        $cli = new WPFlame\CLI( new WPFlame\Storage( $wpdb ) );
+        \WP_CLI::add_command( 'flame', $cli );
+    }, 99 );
+}
