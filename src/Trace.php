@@ -22,6 +22,7 @@ class Trace
     public float $total_query_ms;
     /** @var Span[] */
     public array $spans;
+    public array $meta;
 
     /**
      * @param Span[] $spans
@@ -35,7 +36,8 @@ class Trace
         int $peak_memory,
         string $php_version,
         string $wp_version,
-        array $spans
+        array $spans,
+        array $meta = []
     ) {
         $this->id          = $id;
         $this->url         = $url;
@@ -46,6 +48,7 @@ class Trace
         $this->php_version = $php_version;
         $this->wp_version  = $wp_version;
         $this->spans       = $spans;
+        $this->meta        = $meta;
 
         // Compute query aggregates from DB-type spans
         $this->query_count    = 0;
@@ -72,6 +75,7 @@ class Trace
             'query_count'    => $this->query_count,
             'total_query_ms' => $this->total_query_ms,
             'spans'          => array_map(fn(Span $s) => $s->toArray(), $this->spans),
+            'meta'           => $this->meta,
         ];
     }
 
@@ -91,7 +95,8 @@ class Trace
             (int) $data['peak_memory'],
             (string) $data['php_version'],
             (string) $data['wp_version'],
-            $spans
+            $spans,
+            $data['meta'] ?? []
         );
     }
 }

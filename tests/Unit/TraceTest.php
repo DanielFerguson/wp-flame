@@ -99,6 +99,28 @@ class TraceTest extends TestCase
         $this->assertSame(5.0, $array['total_query_ms']);
         $this->assertCount(2, $array['spans']);
         $this->assertSame('s1', $array['spans'][0]['id']);
+        $this->assertArrayHasKey('meta', $array);
+    }
+
+    public function test_meta_defaults_to_empty_array(): void
+    {
+        $trace = new Trace('t1', '/', 'GET', '2026-01-01T00:00:00+00:00', 100.0, 1024, '8.1', '6.4', []);
+
+        $this->assertSame([], $trace->meta);
+    }
+
+    public function test_meta_round_trip(): void
+    {
+        $meta = ['cache_hits' => 100, 'cache_misses' => 5];
+        $trace = new Trace('t1', '/', 'GET', '2026-01-01T00:00:00+00:00', 100.0, 1024, '8.1', '6.4', [], $meta);
+
+        $array = $trace->toArray();
+        $this->assertSame(100, $array['meta']['cache_hits']);
+        $this->assertSame(5, $array['meta']['cache_misses']);
+
+        $reconstructed = Trace::fromArray($array);
+        $this->assertSame(100, $reconstructed->meta['cache_hits']);
+        $this->assertSame(5, $reconstructed->meta['cache_misses']);
     }
 
     public function test_from_array_round_trip(): void
