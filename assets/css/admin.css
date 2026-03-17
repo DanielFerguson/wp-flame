@@ -173,3 +173,60 @@
     color: #646970;
     font-size: 13px;
 }
+
+/* Dashboard rankings */
+.wp-flame-rankings {
+    display: flex;
+    gap: 16px;
+    margin: 16px 0;
+}
+
+.wp-flame-ranking {
+    flex: 1;
+    background: #fff;
+    border: 1px solid #c3c4c7;
+    border-radius: 4px;
+    padding: 16px;
+}
+
+.wp-flame-ranking h3 {
+    margin: 0 0 12px;
+    font-size: 13px;
+    text-transform: uppercase;
+    color: #646970;
+    letter-spacing: 0.5px;
+}
+
+.wp-flame-ranking table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.wp-flame-ranking td {
+    padding: 6px 0;
+    border-bottom: 1px solid #f0f0f0;
+    font-size: 13px;
+}
+
+.wp-flame-ranking td:last-child {
+    text-align: right;
+    color: #646970;
+}
+
+.wp-flame-ranking tr:last-child td {
+    border-bottom: none;
+}
+
+.wp-flame-trend-good {
+    color: #22c55e;
+}
+
+.wp-flame-trend-bad {
+    color: #ef4444;
+}
+
+.wp-flame-stat .wp-flame-trend {
+    font-size: 12px;
+    display: block;
+    margin-top: 2px;
+}

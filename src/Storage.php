@@ -188,6 +188,61 @@ class Storage
     }
 
     /**
+     * @return array{avg_ms: float, count: int, avg_queries: float, prev_avg_ms: float|null}
+     */
+    public function get_aggregate_stats(int $days = 7): array
+    {
+        $current = $this->wpdb->get_row($this->wpdb->prepare(
+            "SELECT AVG(total_ms) as avg_ms, COUNT(*) as count, AVG(query_count) as avg_queries
+             FROM `{$this->table}` WHERE created_at >= DATE_SUB(NOW(), INTERVAL %d DAY)",
+            $days
+        ));
+
+        $prev = $this->wpdb->get_row($this->wpdb->prepare(
+            "SELECT AVG(total_ms) as avg_ms
+             FROM `{$this->table}` WHERE created_at >= DATE_SUB(NOW(), INTERVAL %d DAY) AND created_at < DATE_SUB(NOW(), INTERVAL %d DAY)",
+            $days * 2, $days
+        ));
+
+        return [
+            'avg_ms'      => (float) ($current->avg_ms ?? 0),
+            'count'       => (int) ($current->count ?? 0),
+            'avg_queries' => (float) ($current->avg_queries ?? 0),
+            'prev_avg_ms' => $prev->avg_ms !== null ? (float) $prev->avg_ms : null,
+        ];
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    public function get_slowest_pages(int $limit = 5, int $days = 7): array
+    {
+        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name is safe
+        $results = $this->wpdb->get_results($this->wpdb->prepare(
+            "SELECT SUBSTRING_INDEX(url, '?', 1) as page_url, AVG(total_ms) as avg_ms, COUNT(*) as hits
+             FROM `{$this->table}` WHERE created_at >= DATE_SUB(NOW(), INTERVAL %d DAY)
+             GROUP BY page_url ORDER BY avg_ms DESC LIMIT %d",
+            $days, $limit
+        ), ARRAY_A);
+
+        return is_array($results) ? $results : [];
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    public function get_recent_trace_data(int $limit = 50): array
+    {
+        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name is safe
+        $results = $this->wpdb->get_col($this->wpdb->prepare(
+            "SELECT trace_data FROM `{$this->table}` ORDER BY created_at DESC LIMIT %d",
+            $limit
+        ));
+
+        return is_array($results) ? $results : [];
+    }
+
+    /**
      * @return array{count: int, bytes: int}
      */
     public function get_stats(): array

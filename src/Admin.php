@@ -103,6 +103,8 @@ class Admin
             echo '<div class="notice notice-success is-dismissible"><p>' . esc_html__('Trace deleted.', 'wp-flame') . '</p></div>';
         }
 
+        $this->render_dashboard();
+
         // Search/filter form
         echo '<form method="get">';
         echo '<input type="hidden" name="page" value="wp-flame">';
@@ -167,6 +169,148 @@ class Admin
         }
 
         echo '</div>';
+    }
+
+    private function render_dashboard(): void
+    {
+        $stats        = $this->storage->get_aggregate_stats(7);
+        $slowest_pages = $this->storage->get_slowest_pages(5, 7);
+
+        // Trend indicator
+        $trend       = '—';
+        $trend_class = '';
+        if ($stats['prev_avg_ms'] !== null) {
+            $change = (($stats['avg_ms'] - $stats['prev_avg_ms']) / $stats['prev_avg_ms']) * 100;
+            if ($change > 10) {
+                $trend       = sprintf('↑ %d%%', round(abs($change)));
+                $trend_class = 'wp-flame-trend-bad';
+            } elseif ($change < -10) {
+                $trend       = sprintf('↓ %d%%', round(abs($change)));
+                $trend_class = 'wp-flame-trend-good';
+            } else {
+                $trend       = '~';
+                $trend_class = '';
+            }
+        }
+
+        // Slowest page for card display
+        $slowest_page_url = ! empty($slowest_pages) ? $slowest_pages[0]['page_url'] : '—';
+        $slowest_page_ms  = ! empty($slowest_pages) ? round((float) $slowest_pages[0]['avg_ms'], 1) : 0;
+
+        // Summary stat cards
+        echo '<div class="wp-flame-summary">';
+
+        echo '<div class="wp-flame-stat">';
+        echo '<span class="wp-flame-stat-label">' . esc_html__('AVG LOAD TIME', 'wp-flame') . '</span>';
+        echo '<span class="wp-flame-stat-value">' . esc_html(round($stats['avg_ms'], 1)) . '<small>ms</small></span>';
+        if ($trend !== '—' && $trend_class !== '') {
+            echo '<span class="wp-flame-trend ' . esc_attr($trend_class) . '">' . esc_html($trend) . '</span>';
+        } else {
+            echo '<span class="wp-flame-trend">' . esc_html($trend) . '</span>';
+        }
+        echo '</div>';
+
+        echo '<div class="wp-flame-stat">';
+        echo '<span class="wp-flame-stat-label">' . esc_html__('TRACES', 'wp-flame') . '</span>';
+        echo '<span class="wp-flame-stat-value">' . esc_html((string) $stats['count']) . '</span>';
+        echo '<span class="wp-flame-trend">' . esc_html__('last 7 days', 'wp-flame') . '</span>';
+        echo '</div>';
+
+        echo '<div class="wp-flame-stat">';
+        echo '<span class="wp-flame-stat-label">' . esc_html__('SLOWEST PAGE', 'wp-flame') . '</span>';
+        echo '<span class="wp-flame-stat-value" style="font-size:14px;word-break:break-all">' . esc_html($slowest_page_url) . '</span>';
+        if ($slowest_page_ms > 0) {
+            echo '<span class="wp-flame-trend">' . esc_html(sprintf(__('avg %s ms', 'wp-flame'), $slowest_page_ms)) . '</span>';
+        }
+        echo '</div>';
+
+        echo '<div class="wp-flame-stat">';
+        echo '<span class="wp-flame-stat-label">' . esc_html__('AVG QUERIES', 'wp-flame') . '</span>';
+        echo '<span class="wp-flame-stat-value">' . esc_html(round($stats['avg_queries'], 1)) . '</span>';
+        echo '<span class="wp-flame-trend">' . esc_html__('per request', 'wp-flame') . '</span>';
+        echo '</div>';
+
+        echo '</div>'; // .wp-flame-summary
+
+        // Slowest callbacks ranking
+        $slowest_callbacks = $this->get_slowest_callbacks(5);
+
+        // Rankings tables
+        echo '<div class="wp-flame-rankings">';
+
+        // Slowest Pages ranking
+        echo '<div class="wp-flame-ranking">';
+        echo '<h3>' . esc_html__('Slowest Pages', 'wp-flame') . '</h3>';
+        echo '<table>';
+        if (empty($slowest_pages)) {
+            echo '<tr><td colspan="2">' . esc_html__('No data yet.', 'wp-flame') . '</td></tr>';
+        } else {
+            foreach ($slowest_pages as $page) {
+                echo '<tr>';
+                echo '<td>' . esc_html($page['page_url']) . '</td>';
+                echo '<td>' . esc_html(round((float) $page['avg_ms'], 1)) . ' ms';
+                echo ' <span style="color:#c3c4c7">(' . esc_html((string) $page['hits']) . 'x)</span>';
+                echo '</td>';
+                echo '</tr>';
+            }
+        }
+        echo '</table>';
+        echo '</div>'; // .wp-flame-ranking
+
+        // Slowest Callbacks ranking
+        echo '<div class="wp-flame-ranking">';
+        echo '<h3>' . esc_html__('Slowest Callbacks', 'wp-flame') . '</h3>';
+        echo '<table>';
+        if (empty($slowest_callbacks)) {
+            echo '<tr><td colspan="2">' . esc_html__('No data yet.', 'wp-flame') . '</td></tr>';
+        } else {
+            foreach ($slowest_callbacks as $name => $total_ms) {
+                echo '<tr>';
+                echo '<td>' . esc_html($name) . '</td>';
+                echo '<td>' . esc_html(round((float) $total_ms, 1)) . ' ms</td>';
+                echo '</tr>';
+            }
+        }
+        echo '</table>';
+        echo '</div>'; // .wp-flame-ranking
+
+        echo '</div>'; // .wp-flame-rankings
+    }
+
+    /**
+     * Build a top-N callback ranking by summing duration_ms across recent traces.
+     *
+     * @return array<string, float>
+     */
+    private function get_slowest_callbacks(int $limit = 5): array
+    {
+        $trace_data_blobs = $this->storage->get_recent_trace_data(50);
+        $totals           = [];
+
+        foreach ($trace_data_blobs as $blob) {
+            $data = json_decode($blob, true);
+            if (! is_array($data) || empty($data['spans'])) {
+                continue;
+            }
+
+            foreach ($data['spans'] as $span) {
+                // Only callback spans (those with a meta.hook key)
+                if (empty($span['meta']['hook'])) {
+                    continue;
+                }
+
+                $name = $span['name'] ?? '';
+                if ($name === '') {
+                    continue;
+                }
+
+                $totals[$name] = ($totals[$name] ?? 0.0) + (float) ($span['duration_ms'] ?? 0);
+            }
+        }
+
+        arsort($totals);
+
+        return array_slice($totals, 0, $limit, true);
     }
 
     private function render_flame_graph_view(string $trace_id): void
