@@ -96,6 +96,8 @@ class Admin
                 $filters['url'] = 'admin-ajax.php';
             } elseif ($type === 'rest') {
                 $filters['url'] = 'wp-json';
+            } elseif ($type === 'graphql') {
+                $filters['url'] = '/graphql';
             }
         }
         if (isset($_GET['user_id']) && $_GET['user_id'] !== '') {
@@ -200,6 +202,7 @@ class Admin
         echo '<option value="cron"' . selected($current_type, 'cron', false) . '>' . esc_html__('Cron', 'wp-flame') . '</option>';
         echo '<option value="ajax"' . selected($current_type, 'ajax', false) . '>' . esc_html__('AJAX', 'wp-flame') . '</option>';
         echo '<option value="rest"' . selected($current_type, 'rest', false) . '>' . esc_html__('REST API', 'wp-flame') . '</option>';
+        echo '<option value="graphql"' . selected($current_type, 'graphql', false) . '>' . esc_html__('GraphQL', 'wp-flame') . '</option>';
         echo '</select>';
         echo '<input type="search" name="s" value="' . esc_attr($filters['url'] ?? '') . '" placeholder="' . esc_attr__('Filter by URL...', 'wp-flame') . '">';
         $current_method = $filters['method'] ?? '';
@@ -810,6 +813,23 @@ class Admin
             echo '</div>';
         }
         echo '</div>';
+
+        // Limited instrumentation notice for Tier 2 GraphQL traces
+        $is_graphql_url = strpos($trace->url, '/graphql') !== false;
+        $has_resolver_spans = false;
+        if ($is_graphql_url) {
+            foreach ($trace->spans as $span) {
+                if (isset($span->meta['type_name'])) {
+                    $has_resolver_spans = true;
+                    break;
+                }
+            }
+            if (!$has_resolver_spans) {
+                echo '<div class="notice notice-info inline" style="margin: 10px 0"><p>';
+                echo esc_html__('Limited instrumentation — resolver detail requires WPGraphQL.', 'wp-flame');
+                echo '</p></div>';
+            }
+        }
 
         // Flame graph container
         echo '<div id="wp-flame-breadcrumbs"></div>';
