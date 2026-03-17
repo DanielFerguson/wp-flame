@@ -15,6 +15,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 // Record request start as early as possible
 $wp_flame_request_start = microtime(true);
 
+define( 'WP_FLAME_MU_VERSION', '1.1.1' );
+
 // Load the main plugin's autoloader
 $wp_flame_autoload = WP_PLUGIN_DIR . '/wp-flame/vendor/autoload.php';
 if ( ! file_exists( $wp_flame_autoload ) ) {

@@ -119,6 +119,15 @@ function wp_flame_init(): void {
         return;
     }
 
+	// Check for mu-plugin version drift and auto-update if needed.
+	if ( defined( 'WP_FLAME_MU_VERSION' ) && WP_FLAME_MU_VERSION !== WP_FLAME_VERSION ) {
+		$mu_source = WP_FLAME_DIR . 'mu-plugin/wp-flame-early-hooks.php';
+		$mu_dest   = WPMU_PLUGIN_DIR . '/wp-flame-early-hooks.php';
+		if ( file_exists( $mu_source ) ) {
+			@copy( $mu_source, $mu_dest );
+		}
+	}
+
     // Degraded mode: if mu-plugin didn't initialize the collector, start now
     if ( ! $collector->is_initialized() ) {
         $collector->start_request( microtime( true ) );
