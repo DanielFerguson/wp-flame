@@ -26,6 +26,8 @@ class Insights
         $insights = array_merge($insights, self::high_query_count($trace));
         $insights = array_merge($insights, self::slow_callbacks($trace));
         $insights = array_merge($insights, self::http_during_early_phases($trace));
+        $insights = array_merge($insights, self::no_persistent_cache($trace));
+        $insights = array_merge($insights, self::low_cache_hit_ratio($trace));
 
         return $insights;
     }
@@ -264,6 +266,77 @@ class Insights
         }
 
         return null;
+    }
+
+    /**
+     * Rule 6: No persistent object cache detected.
+     * Fires when the backend is the default WP_Object_Cache and there are >20 misses.
+     */
+    private static function no_persistent_cache(Trace $trace): array
+    {
+        $backend = $trace->meta['cache_backend'] ?? '';
+
+        if ($backend !== 'WP_Object_Cache') {
+            return [];
+        }
+
+        $misses = (int) ($trace->meta['cache_misses'] ?? 0);
+
+        if ($misses <= 20) {
+            return [];
+        }
+
+        return [
+            [
+                'severity' => 'info',
+                /* translators: %d: number of cache misses */
+                'title'    => __('No persistent object cache detected', 'wp-flame'),
+                /* translators: %d: number of cache misses */
+                'detail'   => sprintf(
+                    __('This request had %d cache misses. A persistent cache (Redis or Memcached) would cache these across requests, reducing database load.', 'wp-flame'),
+                    $misses
+                ),
+            ],
+        ];
+    }
+
+    /**
+     * Rule 7: Low cache hit ratio.
+     * Fires when hit ratio < 80% and total operations > 10.
+     */
+    private static function low_cache_hit_ratio(Trace $trace): array
+    {
+        if (! isset($trace->meta['cache_hits'])) {
+            return [];
+        }
+
+        $hits   = (int) $trace->meta['cache_hits'];
+        $misses = (int) ($trace->meta['cache_misses'] ?? 0);
+        $total  = $hits + $misses;
+
+        if ($total <= 10) {
+            return [];
+        }
+
+        $ratio = (int) round(($hits / $total) * 100);
+
+        if ($ratio >= 80) {
+            return [];
+        }
+
+        return [
+            [
+                'severity' => 'warning',
+                /* translators: %d: cache hit ratio as a percentage */
+                'title'    => sprintf(__('Low cache hit ratio (%d%%)', 'wp-flame'), $ratio),
+                /* translators: 1: number of cache misses, 2: total cache operations */
+                'detail'   => sprintf(
+                    __('%1$d cache misses out of %2$d operations. Investigate which cache groups are missing frequently.', 'wp-flame'),
+                    $misses,
+                    $total
+                ),
+            ],
+        ];
     }
 
     /**

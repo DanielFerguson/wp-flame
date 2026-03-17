@@ -15,7 +15,7 @@ class InsightsTest extends TestCase
     // Helpers
     // ---------------------------------------------------------------------------
 
-    private function make_trace(array $spans): Trace
+    private function make_trace(array $spans, array $meta = []): Trace
     {
         return new Trace(
             'trace-test',
@@ -26,7 +26,8 @@ class InsightsTest extends TestCase
             1048576,
             '8.1',
             '6.4',
-            $spans
+            $spans,
+            $meta
         );
     }
 
@@ -388,6 +389,109 @@ class InsightsTest extends TestCase
         $insights = Insights::analyze($trace);
 
         $this->assertEmpty($insights);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Rule 6: no_persistent_cache
+    // ---------------------------------------------------------------------------
+
+    public function test_no_persistent_cache_fires_when_wp_object_cache_with_many_misses(): void
+    {
+        $trace = $this->make_trace([], [
+            'cache_backend' => 'WP_Object_Cache',
+            'cache_hits'    => 10,
+            'cache_misses'  => 25,
+        ]);
+
+        $insights = Insights::analyze($trace);
+
+        $matches = array_filter($insights, fn($i) => str_contains($i['title'], 'No persistent object cache'));
+        $matches = array_values($matches);
+
+        $this->assertCount(1, $matches);
+        $this->assertSame('info', $matches[0]['severity']);
+        $this->assertStringContainsString('25', $matches[0]['detail']);
+    }
+
+    public function test_no_persistent_cache_does_not_fire_with_redis_backend(): void
+    {
+        $trace = $this->make_trace([], [
+            'cache_backend' => 'Redis_Object_Cache',
+            'cache_hits'    => 10,
+            'cache_misses'  => 25,
+        ]);
+
+        $insights = Insights::analyze($trace);
+
+        $matches = array_filter($insights, fn($i) => str_contains($i['title'], 'No persistent object cache'));
+        $this->assertEmpty($matches);
+    }
+
+    public function test_no_persistent_cache_does_not_fire_when_misses_at_or_below_20(): void
+    {
+        $trace = $this->make_trace([], [
+            'cache_backend' => 'WP_Object_Cache',
+            'cache_hits'    => 50,
+            'cache_misses'  => 20,
+        ]);
+
+        $insights = Insights::analyze($trace);
+
+        $matches = array_filter($insights, fn($i) => str_contains($i['title'], 'No persistent object cache'));
+        $this->assertEmpty($matches);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Rule 7: low_cache_hit_ratio
+    // ---------------------------------------------------------------------------
+
+    public function test_low_cache_hit_ratio_fires_when_ratio_below_80_percent(): void
+    {
+        // 60% hit ratio: 6 hits, 4 misses = 10 total (not > 10, use 11 total)
+        $trace = $this->make_trace([], [
+            'cache_backend' => 'Redis_Object_Cache',
+            'cache_hits'    => 60,
+            'cache_misses'  => 40,
+        ]);
+
+        $insights = Insights::analyze($trace);
+
+        $matches = array_filter($insights, fn($i) => str_contains($i['title'], 'Low cache hit ratio'));
+        $matches = array_values($matches);
+
+        $this->assertCount(1, $matches);
+        $this->assertSame('warning', $matches[0]['severity']);
+        $this->assertStringContainsString('60%', $matches[0]['title']);
+        $this->assertStringContainsString('40', $matches[0]['detail']);
+    }
+
+    public function test_low_cache_hit_ratio_does_not_fire_when_ratio_above_80_percent(): void
+    {
+        $trace = $this->make_trace([], [
+            'cache_backend' => 'Redis_Object_Cache',
+            'cache_hits'    => 95,
+            'cache_misses'  => 5,
+        ]);
+
+        $insights = Insights::analyze($trace);
+
+        $matches = array_filter($insights, fn($i) => str_contains($i['title'], 'Low cache hit ratio'));
+        $this->assertEmpty($matches);
+    }
+
+    public function test_low_cache_hit_ratio_does_not_fire_on_tiny_request(): void
+    {
+        // 2 hits, 1 miss = 3 total (not > 10)
+        $trace = $this->make_trace([], [
+            'cache_backend' => 'Redis_Object_Cache',
+            'cache_hits'    => 2,
+            'cache_misses'  => 1,
+        ]);
+
+        $insights = Insights::analyze($trace);
+
+        $matches = array_filter($insights, fn($i) => str_contains($i['title'], 'Low cache hit ratio'));
+        $this->assertEmpty($matches);
     }
 
     // ---------------------------------------------------------------------------
