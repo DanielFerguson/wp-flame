@@ -68,6 +68,8 @@ function wp_flame_activate(): void {
     add_option( 'wp_flame_retention_days', 7 );
     add_option( 'wp_flame_full_query_text', false );
     add_option( 'wp_flame_min_callback_ms', 0.5 );
+    add_option( 'wp_flame_budget_max_ms', 500 );
+    add_option( 'wp_flame_budget_max_queries', 100 );
 }
 
 function wp_flame_deactivate(): void {

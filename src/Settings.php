@@ -81,6 +81,20 @@ class Settings
                 return (bool) $value;
             },
         ]);
+        register_setting('wp_flame_settings', 'wp_flame_budget_max_ms', [
+            'type'              => 'integer',
+            'default'           => 500,
+            'sanitize_callback' => function ($value) {
+                return max(0, intval($value));
+            },
+        ]);
+        register_setting('wp_flame_settings', 'wp_flame_budget_max_queries', [
+            'type'              => 'integer',
+            'default'           => 100,
+            'sanitize_callback' => function ($value) {
+                return max(0, intval($value));
+            },
+        ]);
 
         // Section
         add_settings_section(
@@ -138,6 +152,30 @@ class Settings
             'wp-flame-settings',
             'wp_flame_general'
         );
+
+        // Performance Budget section
+        add_settings_section(
+            'wp_flame_budget',
+            __('Performance Budget', 'wp-flame'),
+            '__return_false',
+            'wp-flame-settings'
+        );
+
+        add_settings_field(
+            'wp_flame_budget_max_ms',
+            __('Max page load time (ms)', 'wp-flame'),
+            [$this, 'render_field_budget_max_ms'],
+            'wp-flame-settings',
+            'wp_flame_budget'
+        );
+
+        add_settings_field(
+            'wp_flame_budget_max_queries',
+            __('Max database queries', 'wp-flame'),
+            [$this, 'render_field_budget_max_queries'],
+            'wp-flame-settings',
+            'wp_flame_budget'
+        );
     }
 
     public function render_field_enabled(): void
@@ -188,6 +226,20 @@ class Settings
         echo ' ' . esc_html__('Record full SQL query text', 'wp-flame');
         echo '</label>';
         echo '<p class="description">' . esc_html__('When enabled, the complete SQL query is stored with each trace. This may increase storage usage.', 'wp-flame') . '</p>';
+    }
+
+    public function render_field_budget_max_ms(): void
+    {
+        $value = (int) get_option('wp_flame_budget_max_ms', 500);
+        echo '<input type="number" name="wp_flame_budget_max_ms" value="' . esc_attr((string) $value) . '" min="0" class="small-text">';
+        echo '<p class="description">' . esc_html__('Alert when any traced request exceeds this duration. Set to 0 to disable.', 'wp-flame') . '</p>';
+    }
+
+    public function render_field_budget_max_queries(): void
+    {
+        $value = (int) get_option('wp_flame_budget_max_queries', 100);
+        echo '<input type="number" name="wp_flame_budget_max_queries" value="' . esc_attr((string) $value) . '" min="0" class="small-text">';
+        echo '<p class="description">' . esc_html__('Alert when any traced request exceeds this query count. Set to 0 to disable.', 'wp-flame') . '</p>';
     }
 
     public function handle_purge(): void
