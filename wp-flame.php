@@ -194,6 +194,28 @@ function wp_flame_init(): void {
         wp_enqueue_script( 'wp-flame-admin-bar', WP_FLAME_URL . 'assets/js/admin-bar.js', [], WP_FLAME_VERSION, true );
     } );
 
+    // Performance budget violation notice
+    add_action( 'admin_notices', function () {
+        if ( ! current_user_can( 'manage_options' ) ) {
+            return;
+        }
+        $key   = 'wp_flame_budget_violations';
+        $count = (int) get_transient( $key );
+        if ( $count > 0 ) {
+            $url = admin_url( 'tools.php?page=wp-flame&min_duration=' . (int) get_option( 'wp_flame_budget_max_ms', 500 ) );
+            echo '<div class="notice notice-warning is-dismissible"><p>';
+            echo wp_kses_post( sprintf(
+                /* translators: %1$d: number of violations, %2$s: URL to view traces */
+                __( '<strong>WP Flame:</strong> %1$d request(s) exceeded your performance budget in the last hour. <a href="%2$s">View slow traces &rarr;</a>', 'wp-flame' ),
+                $count,
+                esc_url( $url )
+            ) );
+            echo '</p></div>';
+            // Clear after showing
+            delete_transient( $key );
+        }
+    } );
+
     // Admin notice for force-traced pages
     add_action( 'admin_notices', function () {
         if ( ! current_user_can( 'manage_options' ) ) {
