@@ -532,6 +532,81 @@ class Admin
         echo '</div>'; // .wp-flame-ranking
 
         echo '</div>'; // .wp-flame-rankings
+
+        // Second rankings row: Top Users and Top IPs
+        $top_users = $this->storage->get_top_users(5, 7);
+        $top_ips   = $this->storage->get_top_ips(5, 7);
+
+        echo '<div class="wp-flame-rankings">';
+
+        // Top Users by Load
+        echo '<div class="wp-flame-ranking">';
+        echo '<h3>' . esc_html__('Top Users by Load', 'wp-flame') . '</h3>';
+        echo '<table>';
+        echo '<thead><tr>';
+        echo '<th style="text-align:left;font-size:11px;color:#646970;padding:0 0 6px">' . esc_html__('User', 'wp-flame') . '</th>';
+        echo '<th style="text-align:right;font-size:11px;color:#646970;padding:0 0 6px">' . esc_html__('Reqs', 'wp-flame') . '</th>';
+        echo '<th style="text-align:right;font-size:11px;color:#646970;padding:0 0 6px">' . esc_html__('Avg', 'wp-flame') . '</th>';
+        echo '<th style="text-align:right;font-size:11px;color:#646970;padding:0 0 6px">' . esc_html__('Total', 'wp-flame') . '</th>';
+        echo '</tr></thead><tbody>';
+        if (empty($top_users)) {
+            echo '<tr><td colspan="4">' . esc_html__('No data yet.', 'wp-flame') . '</td></tr>';
+        } else {
+            foreach ($top_users as $user_row) {
+                $tu_id   = (int) $user_row['user_id'];
+                $tu_url  = add_query_arg(['page' => 'wp-flame', 'user_id' => $tu_id], admin_url('tools.php'));
+                if ($tu_id > 0 && function_exists('get_userdata')) {
+                    $tu_user = get_userdata($tu_id);
+                    $tu_name = $tu_user ? $tu_user->display_name : '#' . $tu_id;
+                    if ($tu_user) {
+                        $tu_roles = implode(', ', $tu_user->roles);
+                        $tu_name  = $tu_user->display_name . ' (' . $tu_roles . ')';
+                    }
+                } else {
+                    $tu_name = __('Anonymous', 'wp-flame');
+                    $tu_url  = add_query_arg(['page' => 'wp-flame', 'user_id' => 0], admin_url('tools.php'));
+                }
+                $tu_total_s = round((float) $user_row['total_ms'] / 1000, 1);
+                echo '<tr style="cursor:pointer" onclick="window.location=\'' . esc_url($tu_url) . '\'">';
+                echo '<td><a href="' . esc_url($tu_url) . '" style="text-decoration:none;color:inherit">' . esc_html($tu_name) . '</a></td>';
+                echo '<td style="text-align:right">' . esc_html((string) $user_row['request_count']) . '</td>';
+                echo '<td style="text-align:right">' . esc_html(round((float) $user_row['avg_ms'])) . 'ms</td>';
+                echo '<td style="text-align:right">' . esc_html((string) $tu_total_s) . 's</td>';
+                echo '</tr>';
+            }
+        }
+        echo '</tbody></table>';
+        echo '</div>'; // .wp-flame-ranking
+
+        // Top IPs by Requests
+        echo '<div class="wp-flame-ranking">';
+        echo '<h3>' . esc_html__('Top IPs by Requests', 'wp-flame') . '</h3>';
+        echo '<table>';
+        echo '<thead><tr>';
+        echo '<th style="text-align:left;font-size:11px;color:#646970;padding:0 0 6px">' . esc_html__('IP Address', 'wp-flame') . '</th>';
+        echo '<th style="text-align:right;font-size:11px;color:#646970;padding:0 0 6px">' . esc_html__('Reqs', 'wp-flame') . '</th>';
+        echo '<th style="text-align:right;font-size:11px;color:#646970;padding:0 0 6px">' . esc_html__('Avg', 'wp-flame') . '</th>';
+        echo '<th style="text-align:right;font-size:11px;color:#646970;padding:0 0 6px">' . esc_html__('Total', 'wp-flame') . '</th>';
+        echo '</tr></thead><tbody>';
+        if (empty($top_ips)) {
+            echo '<tr><td colspan="4">' . esc_html__('No data yet.', 'wp-flame') . '</td></tr>';
+        } else {
+            foreach ($top_ips as $ip_row) {
+                $ti_ip  = (string) $ip_row['ip_address'];
+                $ti_url = add_query_arg(['page' => 'wp-flame', 'ip_address' => $ti_ip], admin_url('tools.php'));
+                $ti_total_s = round((float) $ip_row['total_ms'] / 1000, 1);
+                echo '<tr style="cursor:pointer" onclick="window.location=\'' . esc_url($ti_url) . '\'">';
+                echo '<td><a href="' . esc_url($ti_url) . '" style="text-decoration:none;color:inherit">' . esc_html($ti_ip) . '</a></td>';
+                echo '<td style="text-align:right">' . esc_html((string) $ip_row['request_count']) . '</td>';
+                echo '<td style="text-align:right">' . esc_html(round((float) $ip_row['avg_ms'])) . 'ms</td>';
+                echo '<td style="text-align:right">' . esc_html((string) $ti_total_s) . 's</td>';
+                echo '</tr>';
+            }
+        }
+        echo '</tbody></table>';
+        echo '</div>'; // .wp-flame-ranking
+
+        echo '</div>'; // .wp-flame-rankings (second row)
     }
 
     /**
