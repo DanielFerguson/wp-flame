@@ -88,6 +88,14 @@ class Admin
         if (! empty($_GET['method'])) {
             $filters['method'] = sanitize_text_field(wp_unslash($_GET['method']));
         }
+        if (! empty($_GET['type'])) {
+            $type = sanitize_text_field(wp_unslash($_GET['type']));
+            if ($type === 'cron') {
+                $filters['url'] = 'wp-cron.php';
+            } elseif ($type === 'ajax') {
+                $filters['url'] = 'admin-ajax.php';
+            }
+        }
         if (! empty($_GET['orderby'])) {
             $filters['orderby'] = sanitize_text_field(wp_unslash($_GET['orderby']));
         }
@@ -145,6 +153,12 @@ class Admin
         echo '<form method="get">';
         echo '<input type="hidden" name="page" value="wp-flame">';
         echo '<div class="tablenav top"><div class="alignleft">';
+        $current_type = isset($_GET['type']) ? sanitize_text_field(wp_unslash($_GET['type'])) : '';
+        echo ' <select name="type" style="height:30px;vertical-align:top">';
+        echo '<option value="">' . esc_html__('All Types', 'wp-flame') . '</option>';
+        echo '<option value="cron"' . selected($current_type, 'cron', false) . '>' . esc_html__('Cron', 'wp-flame') . '</option>';
+        echo '<option value="ajax"' . selected($current_type, 'ajax', false) . '>' . esc_html__('AJAX', 'wp-flame') . '</option>';
+        echo '</select>';
         echo '<input type="search" name="s" value="' . esc_attr($filters['url'] ?? '') . '" placeholder="' . esc_attr__('Filter by URL...', 'wp-flame') . '">';
         $current_method = $filters['method'] ?? '';
         echo ' <select name="method" style="height:30px;vertical-align:top">';

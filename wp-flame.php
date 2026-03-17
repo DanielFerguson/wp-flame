@@ -249,7 +249,10 @@ function wp_flame_shutdown(): void {
         setcookie( 'wp_flame_force_trace', '', time() - 3600, COOKIEPATH, COOKIE_DOMAIN );
     }
 
-    if ( ! $force_trace ) {
+    // Cron requests are always traced (infrequent, server-initiated)
+    $is_cron = defined( 'DOING_CRON' ) && DOING_CRON;
+
+    if ( ! $force_trace && ! $is_cron ) {
         // Audience check
         $audience = get_option( 'wp_flame_trace_audience', 'admins' );
         if ( $audience === 'admins' && empty( $GLOBALS['wp_flame_is_admin_request'] ) ) {
