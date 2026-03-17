@@ -97,7 +97,7 @@ class Insights
             $groups[$query]['total_ms'] += $span->duration_ms;
         }
 
-        $insights = [];
+        $raw_insights = [];
 
         foreach ($groups as $query => $data) {
             $count = $data['count'];
@@ -110,12 +110,46 @@ class Insights
             $query_type   = self::extract_query_type($query);
             $truncated    = strlen($query) > 80 ? substr($query, 0, 80) . '...' : $query;
 
-            $insights[] = [
+            /* translators: 1: number of duplicate queries, 2: SQL query type (e.g. SELECT) */
+            $title = sprintf(__('%1$d duplicate %2$s queries detected', 'wp-flame'), $count, $query_type);
+
+            $raw_insights[] = [
                 'severity' => $severity,
-                /* translators: 1: number of duplicate queries, 2: SQL query type (e.g. SELECT) */
-                'title'    => sprintf(__('%1$d duplicate %2$s queries detected', 'wp-flame'), $count, $query_type),
+                'title'    => $title,
                 /* translators: 1: truncated SQL query, 2: number of times run, 3: total duration in milliseconds */
                 'detail'   => sprintf(__("The query '%1\$s' ran %2\$d times totalling %3\$dms. Consider caching with wp_cache or a transient.", 'wp-flame'), $truncated, $count, $total_ms),
+            ];
+        }
+
+        // Consolidate insights with identical titles (same duplicate count + query type)
+        // to avoid flooding the UI when many distinct queries share the same truncated prefix.
+        $by_title = [];
+        foreach ($raw_insights as $insight) {
+            $by_title[$insight['title']][] = $insight;
+        }
+
+        $insights = [];
+        foreach ($by_title as $title => $group) {
+            if (count($group) === 1) {
+                $insights[] = $group[0];
+                continue;
+            }
+
+            // Merge: keep the highest severity, summarise the count
+            $has_warning = false;
+            foreach ($group as $item) {
+                if ($item['severity'] === 'warning') {
+                    $has_warning = true;
+                    break;
+                }
+            }
+
+            $distinct = count($group);
+            $insights[] = [
+                'severity' => $has_warning ? 'warning' : 'info',
+                /* translators: 1: original title, 2: number of distinct queries */
+                'title'    => sprintf(__('%1$s (%2$d distinct queries)', 'wp-flame'), $title, $distinct),
+                'detail'   => $group[0]['detail'],
             ];
         }
 

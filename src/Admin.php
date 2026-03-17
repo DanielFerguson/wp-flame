@@ -734,6 +734,42 @@ class Admin
         echo ' &mdash; ' . esc_html($trace->method) . ' ' . esc_html($trace->url);
         echo '</h1>';
 
+        // Route comparison: how does this request compare to the average for this URL?
+        $route_stats = $this->storage->get_route_stats($trace->url, 7);
+        if ($route_stats) {
+            $route_path = explode('?', $trace->url, 2)[0];
+            $diff_ms    = $trace->total_ms - $route_stats['avg_ms'];
+            $diff_pct   = $route_stats['avg_ms'] > 0 ? round(($diff_ms / $route_stats['avg_ms']) * 100) : 0;
+
+            echo '<div class="wp-flame-route-comparison">';
+            if ($diff_pct > 10) {
+                $diff_class = 'wp-flame-trend-bad';
+                /* translators: %1$s: percentage, %2$s: route path */
+                $diff_text = sprintf(esc_html__('%1$d%% slower than average for %2$s', 'wp-flame'), abs($diff_pct), $route_path);
+            } elseif ($diff_pct < -10) {
+                $diff_class = 'wp-flame-trend-good';
+                /* translators: %1$s: percentage, %2$s: route path */
+                $diff_text = sprintf(esc_html__('%1$d%% faster than average for %2$s', 'wp-flame'), abs($diff_pct), $route_path);
+            } else {
+                $diff_class = '';
+                /* translators: %s: route path */
+                $diff_text = sprintf(esc_html__('Typical for %s', 'wp-flame'), $route_path);
+            }
+
+            echo '<span class="' . esc_attr($diff_class) . '"><strong>' . esc_html($diff_text) . '</strong></span>';
+            echo '<span class="wp-flame-route-stats">';
+            /* translators: %1$s: avg duration, %2$s: min duration, %3$s: max duration, %4$d: trace count */
+            echo wp_kses_post(sprintf(
+                __('Route avg: <strong>%1$sms</strong> &middot; Min: %2$sms &middot; Max: %3$sms &middot; %4$d traces', 'wp-flame'),
+                esc_html((string) $route_stats['avg_ms']),
+                esc_html((string) $route_stats['min_ms']),
+                esc_html((string) $route_stats['max_ms']),
+                $route_stats['count']
+            ));
+            echo '</span>';
+            echo '</div>';
+        }
+
         // Summary stats bar — matches marketing mockup layout
         echo '<div class="wp-flame-summary">';
         echo '<div class="wp-flame-stat">';
@@ -799,42 +835,6 @@ class Admin
             echo '<span>' . esc_html__('User Agent:', 'wp-flame') . ' ' . esc_html($ctx_ua) . '</span>';
         }
         echo '</div>';
-
-        // Route comparison: how does this request compare to the average for this URL?
-        $route_stats = $this->storage->get_route_stats($trace->url, 7);
-        if ($route_stats) {
-            $route_path = explode('?', $trace->url, 2)[0];
-            $diff_ms    = $trace->total_ms - $route_stats['avg_ms'];
-            $diff_pct   = $route_stats['avg_ms'] > 0 ? round(($diff_ms / $route_stats['avg_ms']) * 100) : 0;
-
-            echo '<div class="wp-flame-route-comparison">';
-            if ($diff_pct > 10) {
-                $diff_class = 'wp-flame-trend-bad';
-                /* translators: %1$s: percentage, %2$s: route path */
-                $diff_text = sprintf(esc_html__('%1$d%% slower than average for %2$s', 'wp-flame'), abs($diff_pct), $route_path);
-            } elseif ($diff_pct < -10) {
-                $diff_class = 'wp-flame-trend-good';
-                /* translators: %1$s: percentage, %2$s: route path */
-                $diff_text = sprintf(esc_html__('%1$d%% faster than average for %2$s', 'wp-flame'), abs($diff_pct), $route_path);
-            } else {
-                $diff_class = '';
-                /* translators: %s: route path */
-                $diff_text = sprintf(esc_html__('Typical for %s', 'wp-flame'), $route_path);
-            }
-
-            echo '<span class="' . esc_attr($diff_class) . '"><strong>' . esc_html($diff_text) . '</strong></span>';
-            echo '<span class="wp-flame-route-stats">';
-            /* translators: %1$s: avg duration, %2$s: min duration, %3$s: max duration, %4$d: trace count */
-            echo wp_kses_post(sprintf(
-                __('Route avg: <strong>%1$sms</strong> &middot; Min: %2$sms &middot; Max: %3$sms &middot; %4$d traces', 'wp-flame'),
-                esc_html((string) $route_stats['avg_ms']),
-                esc_html((string) $route_stats['min_ms']),
-                esc_html((string) $route_stats['max_ms']),
-                $route_stats['count']
-            ));
-            echo '</span>';
-            echo '</div>';
-        }
 
         // Color legend
         echo '<div class="wp-flame-legend">';
