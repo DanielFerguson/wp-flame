@@ -505,6 +505,23 @@ class Admin
         echo '<span class="wp-flame-stat-label">' . esc_html__('PEAK MEMORY', 'wp-flame') . '</span>';
         echo '<span class="wp-flame-stat-value">' . esc_html(round($trace->peak_memory / 1048576)) . '<small>MB</small></span>';
         echo '</div>';
+        // Cache stat card (if cache data available)
+        if (isset($trace->meta['cache_hits'])) {
+            $hits = (int) $trace->meta['cache_hits'];
+            $misses = (int) ($trace->meta['cache_misses'] ?? 0);
+            $total = $hits + $misses;
+            $ratio = $total > 0 ? round(($hits / $total) * 100) : 0;
+            $backend = $trace->meta['cache_backend'] ?? 'WP_Object_Cache';
+            // Show short backend name
+            $short_backend = $backend === 'WP_Object_Cache' ? __('In-Memory', 'wp-flame') : str_replace('_Object_Cache', '', $backend);
+
+            echo '<div class="wp-flame-stat">';
+            echo '<span class="wp-flame-stat-label">' . esc_html__('CACHE', 'wp-flame') . '</span>';
+            echo '<span class="wp-flame-stat-value">' . esc_html($ratio) . '<small>%</small></span>';
+            echo '<span class="wp-flame-trend">' . esc_html($hits) . '/' . esc_html($total) . ' · ' . esc_html($short_backend) . '</span>';
+            echo '</div>';
+        }
+
         echo '<div class="wp-flame-stat-right">';
         echo esc_html($trace->method) . ' ' . esc_html($trace->url) . ' &mdash; ' . esc_html(round($trace->total_ms)) . 'ms';
         echo '</div>';
