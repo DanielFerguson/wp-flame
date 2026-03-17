@@ -189,5 +189,92 @@ namespace WPFlame\Tests\Unit {
             $trace = $collector->get_trace();
             $this->assertCount(1, $trace->spans); // Only the first call
         }
+
+        public function test_activate_wpgraphql_hooks_registers_operation_hooks(): void
+        {
+            $collector = $this->make_collector();
+            $gql = new GraphQL($collector);
+            $gql->activate_wpgraphql_hooks();
+
+            $this->assertArrayHasKey('graphql_process_request', $GLOBALS['wp_flame_test_filters']);
+            $this->assertArrayHasKey('graphql_return_response', $GLOBALS['wp_flame_test_filters']);
+        }
+
+        public function test_constructor_does_not_register_operation_hooks(): void
+        {
+            $collector = $this->make_collector();
+            new GraphQL($collector);
+
+            $this->assertArrayNotHasKey('graphql_process_request', $GLOBALS['wp_flame_test_filters']);
+            $this->assertArrayNotHasKey('graphql_return_response', $GLOBALS['wp_flame_test_filters']);
+        }
+
+        public function test_operation_span_created_and_closed(): void
+        {
+            $collector = $this->make_collector();
+            $gql = new GraphQL($collector);
+            $gql->activate_wpgraphql_hooks();
+
+            // Simulate graphql_process_request
+            $wp_graphql = new class {
+                public function get_query(): string { return '{ posts { nodes { title } } }'; }
+                public function get_operation_name(): ?string { return 'GetPosts'; }
+            };
+
+            $process_callback = $GLOBALS['wp_flame_test_filters']['graphql_process_request'][0]['callback'];
+            $process_callback($wp_graphql);
+
+            // Simulate graphql_return_response
+            $response_callback = $GLOBALS['wp_flame_test_filters']['graphql_return_response'][0]['callback'];
+            $response = ['data' => ['posts' => []]];
+            $result = $response_callback($response);
+
+            // Response must be returned unchanged
+            $this->assertSame($response, $result);
+
+            $trace = $collector->get_trace();
+            $this->assertCount(1, $trace->spans);
+            $this->assertSame('GraphQL: GetPosts', $trace->spans[0]->name);
+            $this->assertSame(Span::TYPE_CORE, $trace->spans[0]->type);
+            $this->assertSame('wpgraphql', $trace->spans[0]->source);
+            $this->assertSame('GetPosts', $trace->spans[0]->meta['graphql_operation']);
+        }
+
+        public function test_graphql_return_response_returns_response_without_operation_span(): void
+        {
+            $collector = $this->make_collector();
+            $gql = new GraphQL($collector);
+            $gql->activate_wpgraphql_hooks();
+
+            // Call graphql_return_response without prior graphql_process_request
+            $response_callback = $GLOBALS['wp_flame_test_filters']['graphql_return_response'][0]['callback'];
+            $response = ['errors' => [['message' => 'Validation failed']]];
+            $result = $response_callback($response);
+
+            $this->assertSame($response, $result);
+            $trace = $collector->get_trace();
+            $this->assertCount(0, $trace->spans);
+        }
+
+        public function test_anonymous_operation_name(): void
+        {
+            $collector = $this->make_collector();
+            $gql = new GraphQL($collector);
+            $gql->activate_wpgraphql_hooks();
+
+            $wp_graphql = new class {
+                public function get_query(): string { return '{ posts { nodes { title } } }'; }
+                public function get_operation_name(): ?string { return null; }
+            };
+
+            $process_callback = $GLOBALS['wp_flame_test_filters']['graphql_process_request'][0]['callback'];
+            $process_callback($wp_graphql);
+
+            $response_callback = $GLOBALS['wp_flame_test_filters']['graphql_return_response'][0]['callback'];
+            $response_callback([]);
+
+            $trace = $collector->get_trace();
+            $this->assertSame('GraphQL: anonymous', $trace->spans[0]->name);
+        }
     }
 }

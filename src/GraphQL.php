@@ -86,7 +86,35 @@ class GraphQL
 
     private function register_operation_hooks(): void
     {
-        // Implemented in Task 3
+        add_action('graphql_process_request', function ($wp_graphql) {
+            try {
+                $query = $wp_graphql->get_query();
+                $operation_name = $wp_graphql->get_operation_name() ?: 'anonymous';
+                $this->operation_span_id = $this->collector->start_span(
+                    "GraphQL: {$operation_name}",
+                    Span::TYPE_CORE,
+                    'wpgraphql'
+                );
+                $this->collector->add_span_meta($this->operation_span_id, [
+                    'graphql_operation' => $operation_name,
+                    'graphql_query' => substr($query, 0, 500),
+                ]);
+            } catch (\Throwable $e) {
+                // Don't break GraphQL processing
+            }
+        }, 10, 1);
+
+        add_filter('graphql_return_response', function ($response) {
+            try {
+                if ($this->operation_span_id !== null) {
+                    $this->collector->end_span($this->operation_span_id);
+                    $this->operation_span_id = null;
+                }
+            } catch (\Throwable $e) {
+                // Don't break GraphQL response
+            }
+            return $response;
+        }, 10, 1);
     }
 
     private function register_resolver_hooks(): void
