@@ -1,10 +1,10 @@
 === WP Flame ===
-Contributors: yourname
+Contributors: chepstowe
 Tags: performance, profiling, flame graph, APM, debugging
 Requires at least: 6.0
 Tested up to: 6.7
 Requires PHP: 7.4
-Stable tag: 0.1.0
+Stable tag: 1.0.0
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -90,7 +90,7 @@ Those require SaaS subscriptions and PHP extensions. WP Flame is free, self-host
 
 == Changelog ==
 
-= 0.1.0 =
+= 1.0.0 =
 * Initial release (Phase 1)
 * Lifecycle phase instrumentation (Bootstrap through Render)
 * Per-callback timing via hook callback wrapping
@@ -124,5 +124,5 @@ Those require SaaS subscriptions and PHP extensions. WP Flame is free, self-host
 
 == Upgrade Notice ==
 
-= 0.1.0 =
+= 1.0.0 =
 Initial release of WP Flame.

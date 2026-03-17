@@ -1,10 +1,11 @@
 <?php
 /**
  * Plugin Name: WP Flame
- * Plugin URI:  https://github.com/your-repo/wp-flame
+ * Plugin URI:  https://www.chepstowe.consulting
  * Description: See exactly where your WordPress request spends its time. Interactive flame graph APM.
- * Version:     0.1.0
- * Author:      Your Name
+ * Version:     1.0.0
+ * Author:      Chepstowe Consulting
+ * Author URI:  https://www.chepstowe.consulting
  * License:     GPL-2.0-or-later
  * Text Domain: wp-flame
  * Requires PHP: 7.4
@@ -17,7 +18,7 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-define( 'WP_FLAME_VERSION', '0.1.0' );
+define( 'WP_FLAME_VERSION', '1.0.0' );
 define( 'WP_FLAME_FILE', __FILE__ );
 define( 'WP_FLAME_DIR', plugin_dir_path( __FILE__ ) );
 define( 'WP_FLAME_URL', plugin_dir_url( __FILE__ ) );
