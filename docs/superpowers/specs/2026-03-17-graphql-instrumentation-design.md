@@ -27,22 +27,41 @@ Three tiers, selected at runtime based on what's available:
 
 ### Detection Logic
 
-In `wp_flame_init()`, after collector initialization:
+**Problem:** `GRAPHQL_REQUEST` is defined by WPGraphQL inside `graphql_process_http_request()`, which fires on the `init` hook or later. Our `wp_flame_init()` runs at `plugins_loaded` priority 0 — too early for `GRAPHQL_REQUEST` to exist.
+
+**Solution:** Two-phase detection using URL heuristic at `plugins_loaded`, confirmed by `GRAPHQL_REQUEST` on `init`.
+
+**Phase 1 — `plugins_loaded` (priority 0):** Use a URL-based heuristic to detect likely GraphQL requests early, before `$wpdb` replacement or callback wrapping would normally occur:
 
 ```php
-$is_graphql = defined('GRAPHQL_REQUEST') && GRAPHQL_REQUEST;
-$has_wpgraphql = function_exists('graphql');
-
-if ($is_graphql && $has_wpgraphql) {
-    // Tier 1: WPGraphQL native instrumentation
-} elseif ($is_graphql) {
-    // Tier 2: Lightweight fallback
-} else {
-    // Tier 3: Normal request (existing code)
-}
+$graphql_endpoint = apply_filters('graphql_endpoint', 'graphql');
+$is_likely_graphql = isset($_SERVER['REQUEST_URI'])
+    && strpos(sanitize_text_field(wp_unslash($_SERVER['REQUEST_URI'])), '/' . $graphql_endpoint) !== false;
 ```
 
-`GRAPHQL_REQUEST` is defined by WPGraphQL and commonly adopted by other GraphQL implementations. `function_exists('graphql')` confirms WPGraphQL specifically (its main API function).
+If `$is_likely_graphql` is true: skip `$wpdb` replacement and callback wrapping, enable `SAVEQUERIES`, instantiate `GraphQL` class in "pending" mode.
+
+If false: proceed with normal Tier 3 instrumentation.
+
+**Phase 2 — `init` (priority 0):** Confirm the detection:
+
+```php
+add_action('init', function () {
+    $confirmed = defined('GRAPHQL_REQUEST') && GRAPHQL_REQUEST;
+    $has_wpgraphql = function_exists('graphql');
+
+    if ($confirmed && $has_wpgraphql) {
+        // Tier 1: activate WPGraphQL native hooks
+    } elseif ($confirmed) {
+        // Tier 2: lightweight fallback (already active)
+    } else {
+        // False positive: URL matched but not actually GraphQL
+        // Late-start normal instrumentation (DB replacement + callback wrapping)
+    }
+}, 0);
+```
+
+**False positive handling:** If the URL heuristic matched but `GRAPHQL_REQUEST` is not defined at `init`, we retroactively start normal instrumentation. DB replacement and one callback-wrapping pass are still possible at `init` — the mu-plugin already handles the earliest phases, and the existing Pass 2 callback wrapping runs at `init` priority 1. We lose Pass 1 (plugins_loaded) wrapping, but this is a rare edge case (a non-GraphQL URL that happens to contain `/graphql`).
 
 ### New File: `src/GraphQL.php`
 
@@ -53,11 +72,21 @@ namespace WPFlame;
 
 class GraphQL {
     private Collector $collector;
-    private array $resolver_spans = [];
+    private array $resolver_span_stacks = []; // Stack per field key for alias handling
+    private ?int $operation_span_id = null;
 
     public function __construct(Collector $collector) {
         $this->collector = $collector;
-        $this->register_hooks();
+        $this->register_db_hooks(); // DB capture via log_query_custom_data — active for both tiers
+    }
+
+    /**
+     * Activate WPGraphQL-specific resolver and operation hooks (Tier 1 only).
+     * Called from init:0 after GRAPHQL_REQUEST and function_exists('graphql') are confirmed.
+     */
+    public function activate_wpgraphql_hooks(): void {
+        $this->register_operation_hooks();
+        $this->register_resolver_hooks();
     }
 }
 ```
@@ -66,11 +95,33 @@ class GraphQL {
 
 **Operation-level span:**
 
-Hook `graphql_execute` (action, fires during execution) to capture the operation name and query string. A top-level "GraphQL: {operationName}" span wraps the entire execution.
+Use `graphql_process_request` action to start the operation span (fires reliably before any field resolution begins, including for requests that fail validation). Use `graphql_return_response` filter to end it.
 
-Since `graphql_execute` fires during execution (not before/after), we instead use:
-- Start the operation span when the first `graphql_pre_resolve_field` fires (or on `graphql_process_request` if available)
-- End the operation span on `graphql_return_response`
+```php
+add_action('graphql_process_request', function ($wp_graphql) {
+    $query = $wp_graphql->get_query();
+    $operation_name = $wp_graphql->get_operation_name() ?: 'anonymous';
+    $this->operation_span_id = $this->collector->start_span(
+        "GraphQL: {$operation_name}",
+        Span::TYPE_CORE,
+        'wpgraphql'
+    );
+    $this->collector->add_span_meta($this->operation_span_id, [
+        'graphql_operation' => $operation_name,
+        'graphql_query' => substr($query, 0, 500),
+    ]);
+}, 10, 1);
+
+add_filter('graphql_return_response', function ($response) {
+    if ($this->operation_span_id !== null) {
+        $this->collector->end_span($this->operation_span_id);
+        $this->operation_span_id = null;
+    }
+    return $response;
+}, 10, 1);
+```
+
+If `graphql_return_response` fires without an operation span (e.g., very early error before `graphql_process_request`), it's a no-op — safe.
 
 **Root field resolver spans:**
 
@@ -82,13 +133,15 @@ WPGraphQL fires two filters per field resolution:
 Root fields are identified by `$type_name` matching `RootQuery`, `RootMutation`, or `RootSubscription` (case-insensitive comparison).
 
 For root fields only (default behavior):
-1. `graphql_pre_resolve_field`: start a span named `"{TypeName}.{field_key}"` with type `TYPE_PLUGIN` and source `"wpgraphql"`. Store span ID keyed by `"{type_name}.{field_key}"`. Always return `$default` unchanged.
-2. `graphql_resolve_field`: end the matching span. Always return `$result` unchanged.
+1. `graphql_pre_resolve_field`: start a span named `"{TypeName}.{field_key}"` with type `TYPE_PLUGIN` and source `"wpgraphql"`. Push span ID onto `$this->resolver_span_stacks["{type_name}.{field_key}"]`. Always return `$default` unchanged.
+2. `graphql_resolve_field`: pop the span ID from the matching stack, end the span. Always return `$result` unchanged.
+
+**Aliased field handling:** GraphQL allows the same field to be queried multiple times with aliases (e.g., `first: posts(...) { ... }` and `second: posts(...) { ... }`). Both resolve `RootQuery.posts`. Using a stack per field key (`$this->resolver_span_stacks["RootQuery.posts"][] = $span_id`) with `array_pop()` on resolution handles this correctly — LIFO order matches GraphQL's resolution pattern.
 
 Span metadata includes:
-- `type_name` — the GraphQL type
-- `field_key` — the field being resolved
-- `operation_type` — query/mutation/subscription
+- `type_name` — the GraphQL type (e.g., `"RootQuery"`)
+- `field_key` — the field being resolved (e.g., `"posts"`)
+- `hook` — set to `"graphql:{type_name}.{field_key}"` (e.g., `"graphql:RootQuery.posts"`) to match the existing slow callback detection pattern in `Score.php` and `Insights.php`
 
 **Operation metadata:**
 
@@ -102,26 +155,46 @@ Store as span meta on the operation-level span.
 
 Instead of replacing `$wpdb`, use WordPress's built-in query logging:
 
-1. Conditionally enable `SAVEQUERIES` for GraphQL requests (if not already defined):
+1. Conditionally enable `SAVEQUERIES` for GraphQL requests (if not already defined). This happens in Phase 1 at `plugins_loaded`:
    ```php
    if (!defined('SAVEQUERIES')) {
        define('SAVEQUERIES', true);
    }
    ```
-   This must happen early — in the detection block before any queries run.
 
 2. Hook `log_query_custom_data` filter (fires after each query when SAVEQUERIES is on):
    ```php
    add_filter('log_query_custom_data', function($query_data, $query, $query_time, $query_callstack, $query_start) {
-       // Create a DB span with the query text, timing, and source
-       // Use CallbackResolver::resolve_source_from_backtrace() for attribution
+       // Source attribution via debug_backtrace (same pattern as DB::get_caller_source())
+       $backtrace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 15);
+       $source = $this->get_caller_source($backtrace);
+
+       // Query text truncation (respects wp_flame_full_query_text setting)
+       $full_text = get_option('wp_flame_full_query_text', false);
+       $query_text = $full_text ? $query : substr($query, 0, 200);
+
+       // Create a completed DB span with pre-computed absolute timing
+       // add_completed_span converts to relative ms internally using $request_start
+       $this->collector->add_completed_span(
+           $query_text,
+           Span::TYPE_DB,
+           $source,
+           $query_start,      // absolute microtime(true) when query started
+           $query_time,        // duration in seconds
+           ['query' => $query_text]
+       );
+
        return $query_data;
    }, 10, 5);
    ```
 
-This provides the same data as our `$wpdb` replacement (query text, execution time, source attribution) without modifying the `$wpdb` object.
+**New method on Collector:** `add_completed_span(string $name, string $type, string $source, float $abs_start, float $duration_sec, array $meta = []): int` — creates a span with pre-computed timing. Accepts absolute `microtime(true)` start and duration in seconds (matching the values provided by `log_query_custom_data`). Internally converts to relative milliseconds using the private `$request_start` property: `$start_ms = ($abs_start - $this->request_start) * 1000` and `$duration_ms = $duration_sec * 1000`. This keeps `$request_start` encapsulated within `Collector` and avoids needing a public getter.
 
-**Note:** `SAVEQUERIES` causes `$wpdb` to store all queries in memory. For typical GraphQL requests (10-50 queries), this is negligible. If memory becomes a concern for very large queries, we can periodically flush `$wpdb->queries`.
+**Source attribution:** Uses `debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 15)` inside the filter handler, following the same file-path-based pattern as `DB::get_caller_source()`. Does NOT use the `$query_callstack` parameter (4th arg) because it's a pre-formatted comma-separated string from `wp_debug_backtrace_summary()`, which is harder to parse for file-path-based source attribution.
+
+**Bootstrap query gap:** Queries executed before `plugins_loaded` (WordPress core bootstrap queries) will not be captured via `log_query_custom_data`, because `SAVEQUERIES` is not defined until our plugin loads. This is acceptable because all GraphQL-relevant queries (resolver queries, connection queries) happen post-`init`. The missed queries are WordPress core operations (option loading, user session checks, etc.) that are captured by the lifecycle phase spans.
+
+**Memory:** `SAVEQUERIES` causes `$wpdb` to store all queries in `$wpdb->queries`. For typical GraphQL requests (10-50 queries), this is negligible overhead.
 
 #### Lightweight Fallback (Tier 2)
 
@@ -136,9 +209,11 @@ No resolver-level spans — no hooks to attach to.
 
 ### Score Handling
 
-**Tier 1:** Same 5-factor weighted algorithm. The "Slow Callbacks" factor (15%) is reinterpreted as "Slow Resolvers" — counts root-field resolver spans exceeding the configured threshold (default 50ms). No changes to `Score::calculate()` needed; it already counts spans by type. GraphQL resolver spans use `TYPE_PLUGIN` with source `"wpgraphql"`, and we add `meta['hook']` to match the existing slow callback detection pattern.
+**Both Tiers 1 & 2:** Use `Score::calculate()` (the full algorithm), not `calculate_from_basic()`.
 
-**Tier 2:** Use existing `Score::calculate_from_basic()` fallback, which handles partial data gracefully (assumes excellent scores for missing factors).
+Tier 1 traces have all 5 factors: response time, HTTP spans, DB spans (via `log_query_custom_data`), DB time ratio, and slow resolvers (resolver spans with `meta['hook']` matching the existing slow callback detection).
+
+Tier 2 traces have 4 of 5 factors: response time, HTTP spans, DB spans, and DB time ratio. Only "slow callbacks/resolvers" is missing — this factor scores 100 automatically (no spans with `meta['hook']`). This inflates only 1 factor (15% weight) rather than 3 factors (45% weight) if we used `calculate_from_basic()`.
 
 ### Insights
 
@@ -149,10 +224,23 @@ All 7 existing insight rules work without modification:
 | Slow HTTP requests | Works | Works |
 | Duplicate DB queries | Works (via log_query_custom_data) | Works |
 | High query count | Works | Works |
-| Slow callbacks / resolvers | Works (resolver spans have `meta['hook']`) | No data |
+| Slow callbacks / resolvers | Works (resolver spans have `meta['hook']`) | No data (acceptable) |
 | HTTP during early phases | Works | Works |
 | No persistent cache | Works | Works |
 | Low cache hit ratio | Works | Works |
+
+### Span Type Decision
+
+Resolver spans use `TYPE_PLUGIN` with source `"wpgraphql"` rather than introducing a new `TYPE_GRAPHQL` constant. Rationale:
+
+- Avoids changes to `Span.php`, `Score.php`, `Insights.php`, and the flame graph color mapping
+- GraphQL resolvers *are* plugin code (WPGraphQL is a plugin) — `TYPE_PLUGIN` is semantically accurate
+- The `source` field (`"wpgraphql"`) and `meta['hook']` prefix (`"graphql:"`) provide sufficient differentiation for any future filtering or grouping needs
+- If a dedicated type becomes necessary later, it's a straightforward addition
+
+### Batched GraphQL Requests
+
+WPGraphQL supports batched queries (`[{query: "..."}, {query: "..."}]`). Each query in the batch triggers its own `graphql_process_request` / `graphql_return_response` cycle, so our operation-level span naturally creates one span per query in the batch. The overall request timing (lifecycle phases, total_ms) wraps the entire batch. This is the correct behavior — each operation is a distinct unit of work within the request.
 
 ### UI Changes
 
@@ -182,33 +270,55 @@ Tier 1 traces look identical to normal traces — no special treatment.
 
 ### Integration with `wp-flame.php`
 
-The `wp_flame_init()` function changes from:
+The `wp_flame_init()` function changes to a two-phase approach:
+
+**Phase 1 (at `plugins_loaded` priority 0) — existing location:**
 
 ```php
-// Current: skip everything for GraphQL
-$is_graphql = defined('GRAPHQL_REQUEST') && GRAPHQL_REQUEST;
-global $wpdb;
-if (!$is_graphql && WPFlame\DB::can_replace($wpdb)) { ... }
-// ...
-if (!$is_graphql) { /* callback wrapping */ }
-```
+// URL-based GraphQL heuristic (GRAPHQL_REQUEST not available yet)
+$graphql_endpoint = apply_filters('graphql_endpoint', 'graphql');
+$is_likely_graphql = isset($_SERVER['REQUEST_URI'])
+    && strpos(sanitize_text_field(wp_unslash($_SERVER['REQUEST_URI'])), '/' . $graphql_endpoint) !== false;
 
-To:
-
-```php
-$is_graphql = defined('GRAPHQL_REQUEST') && GRAPHQL_REQUEST;
 global $wpdb;
 
-if ($is_graphql) {
-    // GraphQL: use native instrumentation (no $wpdb replace, no callback wrapping)
-    new WPFlame\GraphQL($collector, function_exists('graphql'));
+if ($is_likely_graphql) {
+    // Enable query logging for GraphQL DB capture
+    if (!defined('SAVEQUERIES')) {
+        define('SAVEQUERIES', true);
+    }
+    // Instantiate GraphQL instrumentation (DB hooks register immediately)
+    $graphql_inst = new WPFlame\GraphQL($collector);
 } else {
     // Normal: existing DB replacement + callback wrapping
     if (WPFlame\DB::can_replace($wpdb)) {
         $GLOBALS['wpdb'] = WPFlame\DB::from_wpdb($wpdb, $collector);
     }
-    // ... existing callback wrapping code ...
+    // ... existing callback wrapping (Pass 1 at plugins_loaded:1) ...
 }
+```
+
+**Phase 2 (at `init` priority 0) — new:**
+
+```php
+add_action('init', function () use ($collector, &$graphql_inst, $is_likely_graphql) {
+    $confirmed = defined('GRAPHQL_REQUEST') && GRAPHQL_REQUEST;
+    $has_wpgraphql = function_exists('graphql');
+
+    if ($confirmed && $has_wpgraphql) {
+        // Tier 1: activate WPGraphQL resolver hooks
+        $graphql_inst->activate_wpgraphql_hooks();
+    } elseif ($confirmed) {
+        // Tier 2: DB hooks already active, nothing more to do
+    } elseif ($is_likely_graphql) {
+        // False positive: start normal instrumentation late
+        global $wpdb;
+        if (WPFlame\DB::can_replace($wpdb)) {
+            $GLOBALS['wpdb'] = WPFlame\DB::from_wpdb($wpdb, $collector);
+        }
+        // Pass 2 callback wrapping still runs at init:1 (existing code)
+    }
+}, 0);
 ```
 
 Everything else (HTTP instrumentation, template detection, shutdown handler, admin UI, settings) remains unchanged and runs for all request types.
@@ -219,7 +329,8 @@ Everything else (HTTP instrumentation, template detection, shutdown handler, adm
 
 ## Files to Modify
 
-- `wp-flame.php` — replace `$is_graphql` skip-guards with tiered dispatch to `GraphQL` class
+- `wp-flame.php` — replace `$is_graphql` skip-guards with two-phase tiered dispatch
+- `src/Collector.php` — add `add_completed_span()` method for pre-computed timing
 - `src/Admin.php` — add "GraphQL" to type filter dropdown
 - `src/Admin.php` — add limited-instrumentation badge on flame graph view for Tier 2 traces
 
@@ -227,14 +338,19 @@ Everything else (HTTP instrumentation, template detection, shutdown handler, adm
 
 ### Unit Tests
 
-- `GraphQL::__construct()` registers correct hooks based on tier
+- `GraphQL::__construct()` registers DB hooks immediately, resolver hooks only when `activate_wpgraphql_hooks()` is called
 - Root field detection: only `RootQuery`/`RootMutation`/`RootSubscription` type names trigger spans
+- Aliased fields: two spans for the same field key resolve correctly via stack
 - `graphql_pre_resolve_field` always returns `$default` unchanged
 - `graphql_resolve_field` always returns `$result` unchanged
-- DB spans created via `log_query_custom_data` with correct timing and source
+- DB spans created via `log_query_custom_data` with correct pre-computed timing and source
+- DB query text respects `wp_flame_full_query_text` truncation setting
 - Operation-level span captures operation name and type
+- Operation span ends cleanly even if no fields resolve (validation error)
 - Tier 2 mode: no resolver hooks registered, DB hooks still active
 - Score calculation works correctly with resolver spans as "slow callback" proxies
+- `Collector::add_completed_span()` creates spans with specified start_ms and duration_ms
+- False-positive detection: normal instrumentation starts late when URL matched but GRAPHQL_REQUEST not defined
 
 ### Integration Verification
 
@@ -242,6 +358,8 @@ Everything else (HTTP instrumentation, template detection, shutdown handler, adm
 - WPGraphQL request without Stellate: full flame graph with resolver spans and DB queries
 - GraphQL request without WPGraphQL: lifecycle + HTTP + DB spans, no resolvers, info badge shown
 - Stellate site: no 500 error, traces captured with full data
+- Batched GraphQL requests: one operation span per query in the batch
+- False positive URL match: normal instrumentation resumes (minus Pass 1 callback wrapping)
 
 ## Non-Goals
 
@@ -249,3 +367,4 @@ Everything else (HTTP instrumentation, template detection, shutdown handler, adm
 - Custom GraphQL implementations beyond WPGraphQL for Tier 1
 - GraphQL subscription/websocket instrumentation
 - Query complexity scoring (future work)
+- Dedicated `TYPE_GRAPHQL` span type (see Span Type Decision section for rationale)
