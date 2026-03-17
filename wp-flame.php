@@ -38,6 +38,7 @@ function wp_flame_activate(): void {
     global $wpdb;
     $storage = new WPFlame\Storage( $wpdb );
     $storage->create_table();
+    update_option( 'wp_flame_schema_version', WPFlame\Storage::SCHEMA_VERSION );
 
     // Attempt to copy mu-plugin
     $mu_dir  = WPMU_PLUGIN_DIR;
@@ -128,6 +129,15 @@ function wp_flame_init(): void {
 		}
 	}
 
+    global $wpdb;
+
+	// Run schema migrations if needed (cheap no-op when current).
+	if ( (int) get_option( 'wp_flame_schema_version', 0 ) < WPFlame\Storage::SCHEMA_VERSION ) {
+		$upgrade_storage = new WPFlame\Storage( $wpdb );
+		$upgrade_storage->maybe_upgrade();
+		unset( $upgrade_storage );
+	}
+
     // Degraded mode: if mu-plugin didn't initialize the collector, start now
     if ( ! $collector->is_initialized() ) {
         $collector->start_request( microtime( true ) );
@@ -166,8 +176,6 @@ function wp_flame_init(): void {
         ? rtrim( parse_url( wp_unslash( $_SERVER['REQUEST_URI'] ), PHP_URL_PATH ) ?: '', '/' )
         : '';
     $is_likely_graphql = WPFlame\GraphQL::is_graphql_endpoint( $request_path, $graphql_endpoint );
-
-    global $wpdb;
     $graphql_inst = null;
 
     if ( $is_likely_graphql ) {
