@@ -303,11 +303,12 @@ a.wp-flame-histogram-row.wp-flame-histogram-active {
 }
 
 .wp-flame-histogram-label {
-    width: 70px;
+    width: 90px;
     font-size: 11px;
     color: #646970;
     text-align: right;
     flex-shrink: 0;
+    white-space: nowrap;
 }
 
 .wp-flame-histogram-bar-container {
