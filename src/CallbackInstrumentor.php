@@ -40,6 +40,27 @@ class CallbackInstrumentor implements Instrumentor
             }
             $this->wrap_callbacks( $collector, $min_ms );
         }, 1 );
+
+        add_action( 'template_redirect', function () use ( $collector, $min_ms ) {
+            if ( ! empty( $GLOBALS['wp_flame_skip_callback_wrapping'] ) ) {
+                return;
+            }
+            $this->wrap_callbacks( $collector, $min_ms );
+        }, 0 );
+
+        add_action( 'admin_init', function () use ( $collector, $min_ms ) {
+            if ( ! empty( $GLOBALS['wp_flame_skip_callback_wrapping'] ) ) {
+                return;
+            }
+            $this->wrap_callbacks( $collector, $min_ms );
+        }, 0 );
+
+        add_action( 'rest_api_init', function () use ( $collector, $min_ms ) {
+            if ( ! empty( $GLOBALS['wp_flame_skip_callback_wrapping'] ) ) {
+                return;
+            }
+            $this->wrap_callbacks( $collector, $min_ms );
+        }, 0 );
     }
 
     /**
