@@ -672,6 +672,7 @@ class Admin
 
         // Abuse detection insights
         $abuse_insights = \WPFlame\Insights::analyze_dashboard($top_users, $top_ips, $recent_trace_rows);
+        $abuse_insights = apply_filters( 'wp_flame_insights', $abuse_insights, null );
         if (! empty($abuse_insights)) {
             echo '<div class="wp-flame-insights">';
             echo '<h3>' . esc_html__('Abuse Detection', 'wp-flame') . '</h3>';
@@ -893,6 +894,7 @@ class Admin
         echo '<div id="wp-flame-tooltip" style="display:none"></div>';
 
         $insights = \WPFlame\Insights::analyze($trace);
+        $insights = apply_filters( 'wp_flame_insights', $insights, $trace );
         if (!empty($insights)) {
             echo '<div class="wp-flame-insights">';
             echo '<h3>' . esc_html__('Insights', 'wp-flame') . '</h3>';

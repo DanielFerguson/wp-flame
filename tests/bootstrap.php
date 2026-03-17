@@ -54,6 +54,12 @@ if ( ! function_exists( 'apply_filters' ) ) {
         return $value;
     }
 }
+
+if ( ! function_exists( 'do_action' ) ) {
+    function do_action( $tag ) {
+        // No-op in unit tests.
+    }
+}
 if ( ! function_exists( 'add_filter' ) ) {
     function add_filter( $hook, $callback, $priority = 10, $accepted_args = 1 ) { return true; }
 }

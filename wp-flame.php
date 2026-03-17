@@ -404,6 +404,8 @@ function wp_flame_shutdown(): void {
     $track_ips  = $config->get( 'wp_flame_track_ips', true );
     $ip_address = $track_ips ? wp_flame_get_client_ip() : '';
 
+	$request_meta = apply_filters( 'wp_flame_trace_meta', $request_meta );
+
     // Step 4: Build trace
     $trace = $collector->get_trace( $request_meta );
 
@@ -415,6 +417,12 @@ function wp_flame_shutdown(): void {
         set_transient( 'wp_flame_last_force_trace_' . $user_id, $trace->id, 60 );
     }
 
+    $should_store = apply_filters( 'wp_flame_should_store_trace', true, $trace );
+    if ( ! $should_store ) {
+        $collector->stop();
+        return;
+    }
+
     // Step 5: Stop collector (prevents self-instrumentation during save)
     $collector->stop();
 
@@ -422,6 +430,7 @@ function wp_flame_shutdown(): void {
     global $wpdb;
     $storage = new WPFlame\Storage( $wpdb );
     $storage->save_trace( $trace, $score_result['score'], $user_id, $ip_address );
+    do_action( 'wp_flame_trace_stored', $trace, $score_result );
 
     // Step 7: Check performance budget thresholds
     $budget_max_ms      = (int) $config->get( 'wp_flame_budget_max_ms', 500 );
