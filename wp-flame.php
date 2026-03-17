@@ -307,6 +307,9 @@ function wp_flame_shutdown(): void {
     // Step 4: Build trace
     $trace = $collector->get_trace( $request_meta );
 
+    // Compute performance score
+    $score_result = \WPFlame\Score::calculate( $trace );
+
     // If force-trace, store the trace ID for admin notice
     if ( $force_trace && function_exists( 'set_transient' ) ) {
         set_transient( 'wp_flame_last_force_trace_' . get_current_user_id(), $trace->id, 60 );
@@ -318,7 +321,7 @@ function wp_flame_shutdown(): void {
     // Step 6: Save trace
     global $wpdb;
     $storage = new WPFlame\Storage( $wpdb );
-    $storage->save_trace( $trace );
+    $storage->save_trace( $trace, $score_result['score'] );
 
     // Step 7: Check performance budget thresholds
     $budget_max_ms      = (int) get_option( 'wp_flame_budget_max_ms', 500 );
