@@ -3,7 +3,7 @@
  * Plugin Name: WP Flame
  * Plugin URI:  https://www.chepstowe.consulting
  * Description: See exactly where your WordPress request spends its time. Interactive flame graph APM.
- * Version:     1.1.1
+ * Version:     1.2.0
  * Author:      Chepstowe Consulting
  * Author URI:  https://www.chepstowe.consulting
  * License:     GPL-2.0-or-later
@@ -18,7 +18,7 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-define( 'WP_FLAME_VERSION', '1.1.1' );
+define( 'WP_FLAME_VERSION', '1.2.0' );
 define( 'WP_FLAME_FILE', __FILE__ );
 define( 'WP_FLAME_DIR', plugin_dir_path( __FILE__ ) );
 define( 'WP_FLAME_URL', plugin_dir_url( __FILE__ ) );
@@ -103,6 +103,34 @@ function wp_flame_get_client_ip(): string {
         }
     }
     return '';
+}
+
+// --- Request type detection ---
+
+/**
+ * Detect the current request type for phase map selection.
+ */
+function wp_flame_detect_request_type(): string
+{
+    if ( defined( 'WP_CLI' ) && WP_CLI ) {
+        return 'cli';
+    }
+    if ( defined( 'DOING_CRON' ) && DOING_CRON ) {
+        return 'cron';
+    }
+    if ( defined( 'DOING_AJAX' ) && DOING_AJAX ) {
+        return 'ajax';
+    }
+    // REST detection via URL pattern — REST_REQUEST is not defined until rest_api_init.
+    $rest_prefix = rest_get_url_prefix();
+    $request_uri = isset( $_SERVER['REQUEST_URI'] ) ? $_SERVER['REQUEST_URI'] : '';
+    if ( false !== strpos( $request_uri, '/' . $rest_prefix . '/' ) || false !== strpos( $request_uri, '/' . $rest_prefix . '?' ) ) {
+        return 'rest';
+    }
+    if ( is_admin() ) {
+        return 'admin';
+    }
+    return 'frontend';
 }
 
 // --- Main plugin initialization ---
@@ -207,6 +235,73 @@ function wp_flame_init(): void {
 
     if ( $graphql_active ) {
         $GLOBALS['wp_flame_skip_callback_wrapping'] = true;
+    }
+
+    // Register late phases based on request type.
+    // Only register if mu-plugin is current (old mu-plugin still registers late phases).
+    if ( defined( 'WP_FLAME_MU_VERSION' ) && WP_FLAME_MU_VERSION === WP_FLAME_VERSION ) {
+        $request_type = wp_flame_detect_request_type();
+
+        switch ( $request_type ) {
+            case 'frontend':
+                // init → Routing, wp → Main Query, template_redirect → Render
+                add_action( 'init', function () use ( $collector ) {
+                    $collector->end_span( $GLOBALS['wp_flame_current_phase_id'] ?? null );
+                    $GLOBALS['wp_flame_current_phase_id'] = $collector->start_span( 'Routing', WPFlame\Span::TYPE_CORE, 'wordpress' );
+                }, 0 );
+                add_action( 'wp', function () use ( $collector ) {
+                    $collector->end_span( $GLOBALS['wp_flame_current_phase_id'] ?? null );
+                    $GLOBALS['wp_flame_current_phase_id'] = $collector->start_span( 'Main Query', WPFlame\Span::TYPE_CORE, 'wordpress' );
+                }, 0 );
+                add_action( 'template_redirect', function () use ( $collector ) {
+                    $collector->end_span( $GLOBALS['wp_flame_current_phase_id'] ?? null );
+                    $GLOBALS['wp_flame_current_phase_id'] = $collector->start_span( 'Render', WPFlame\Span::TYPE_CORE, 'wordpress' );
+                }, 0 );
+                break;
+
+            case 'rest':
+                add_action( 'init', function () use ( $collector ) {
+                    $collector->end_span( $GLOBALS['wp_flame_current_phase_id'] ?? null );
+                    $GLOBALS['wp_flame_current_phase_id'] = $collector->start_span( 'Routing', WPFlame\Span::TYPE_CORE, 'wordpress' );
+                }, 0 );
+                add_action( 'rest_api_init', function () use ( $collector ) {
+                    $collector->end_span( $GLOBALS['wp_flame_current_phase_id'] ?? null );
+                    $GLOBALS['wp_flame_current_phase_id'] = $collector->start_span( 'REST Dispatch', WPFlame\Span::TYPE_CORE, 'wordpress' );
+                }, 0 );
+                break;
+
+            case 'admin':
+                add_action( 'init', function () use ( $collector ) {
+                    $collector->end_span( $GLOBALS['wp_flame_current_phase_id'] ?? null );
+                    $GLOBALS['wp_flame_current_phase_id'] = $collector->start_span( 'Admin Init', WPFlame\Span::TYPE_CORE, 'wordpress' );
+                }, 0 );
+                add_action( 'admin_init', function () use ( $collector ) {
+                    $collector->end_span( $GLOBALS['wp_flame_current_phase_id'] ?? null );
+                    $GLOBALS['wp_flame_current_phase_id'] = $collector->start_span( 'Admin Render', WPFlame\Span::TYPE_CORE, 'wordpress' );
+                }, 0 );
+                break;
+
+            case 'ajax':
+                add_action( 'init', function () use ( $collector ) {
+                    $collector->end_span( $GLOBALS['wp_flame_current_phase_id'] ?? null );
+                    $GLOBALS['wp_flame_current_phase_id'] = $collector->start_span( 'AJAX Dispatch', WPFlame\Span::TYPE_CORE, 'wordpress' );
+                }, 0 );
+                break;
+
+            case 'cli':
+                add_action( 'init', function () use ( $collector ) {
+                    $collector->end_span( $GLOBALS['wp_flame_current_phase_id'] ?? null );
+                    $GLOBALS['wp_flame_current_phase_id'] = $collector->start_span( 'Command Execution', WPFlame\Span::TYPE_CORE, 'wordpress' );
+                }, 0 );
+                break;
+
+            case 'cron':
+                add_action( 'init', function () use ( $collector ) {
+                    $collector->end_span( $GLOBALS['wp_flame_current_phase_id'] ?? null );
+                    $GLOBALS['wp_flame_current_phase_id'] = $collector->start_span( 'Cron Execution', WPFlame\Span::TYPE_CORE, 'wordpress' );
+                }, 0 );
+                break;
+        }
     }
 
     // Capture which template file WordPress selects for rendering
