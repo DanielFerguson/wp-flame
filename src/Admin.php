@@ -94,6 +94,8 @@ class Admin
                 $filters['url'] = 'wp-cron.php';
             } elseif ($type === 'ajax') {
                 $filters['url'] = 'admin-ajax.php';
+            } elseif ($type === 'rest') {
+                $filters['url'] = 'wp-json';
             }
         }
         if (! empty($_GET['orderby'])) {
@@ -158,6 +160,7 @@ class Admin
         echo '<option value="">' . esc_html__('All Types', 'wp-flame') . '</option>';
         echo '<option value="cron"' . selected($current_type, 'cron', false) . '>' . esc_html__('Cron', 'wp-flame') . '</option>';
         echo '<option value="ajax"' . selected($current_type, 'ajax', false) . '>' . esc_html__('AJAX', 'wp-flame') . '</option>';
+        echo '<option value="rest"' . selected($current_type, 'rest', false) . '>' . esc_html__('REST API', 'wp-flame') . '</option>';
         echo '</select>';
         echo '<input type="search" name="s" value="' . esc_attr($filters['url'] ?? '') . '" placeholder="' . esc_attr__('Filter by URL...', 'wp-flame') . '">';
         $current_method = $filters['method'] ?? '';
