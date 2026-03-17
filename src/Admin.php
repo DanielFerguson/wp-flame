@@ -97,7 +97,7 @@ class Admin
         $pages  = (int) ceil($total / $per_page);
 
         echo '<div class="wrap">';
-        echo '<h1>' . esc_html__('WP Flame', 'wp-flame') . '</h1>';
+        echo '<h1><svg width="24" height="24" viewBox="0 0 24 24" fill="none" style="vertical-align:middle;margin-right:6px"><path d="M12 2C8.5 6 4 9.5 4 14a8 8 0 0016 0c0-4.5-4.5-8-8-12zm0 18a6 6 0 01-6-6c0-3.2 2.8-6.1 6-9.8 3.2 3.7 6 6.6 6 9.8a6 6 0 01-6 6zm-1-5c0 1.1.9 2 2 2s2-.9 2-2c0-1.5-2-3.5-2-3.5S11 13.5 11 15z" fill="#ef4444"/></svg>' . esc_html__('WP Flame', 'wp-flame') . '</h1>';
         echo '<p><a href="' . esc_url(admin_url('options-general.php?page=wp-flame-settings')) . '">' . esc_html__('Settings', 'wp-flame') . '</a></p>';
 
         $deleted_key = 'wp_flame_deleted_' . get_current_user_id();
