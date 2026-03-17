@@ -172,7 +172,7 @@ public function add_completed_span(
 - [ ] **Step 7: Run all tests**
 
 Run: `vendor/bin/phpunit --testsuite unit`
-Expected: All tests pass (122 existing + 4 new = 126)
+Expected: 126 tests pass (122 existing + 4 new)
 
 - [ ] **Step 8: Commit**
 
@@ -315,9 +315,9 @@ namespace WPFlame\Tests\Unit {
 Run: `vendor/bin/phpunit --filter GraphQLTest`
 Expected: FAIL — class `WPFlame\GraphQL` not found
 
-- [ ] **Step 3: Implement GraphQL class skeleton with DB hooks**
+- [ ] **Step 3: Implement GraphQL class skeleton (DB hook registers but does NOT create spans yet)**
 
-Create `src/GraphQL.php`:
+Create `src/GraphQL.php` with the full structure but a **minimal** `register_db_hooks()` that only registers a passthrough callback (no span creation). This lets the constructor/deactivate tests pass first:
 
 ```php
 <?php
@@ -351,6 +351,20 @@ class GraphQL
     }
 
     /**
+     * Check if a request path matches a GraphQL endpoint.
+     * Extracted as static method for testability from wp-flame.php.
+     * Expects $request_path to already have trailing slash stripped.
+     */
+    public static function is_graphql_endpoint(string $request_path, string $endpoint = 'graphql'): bool
+    {
+        if ($request_path === '') {
+            return false;
+        }
+        return $request_path === '/' . $endpoint
+            || substr($request_path, -strlen('/' . $endpoint)) === '/' . $endpoint;
+    }
+
+    /**
      * Activate WPGraphQL-specific resolver and operation hooks (Tier 1 only).
      */
     public function activate_wpgraphql_hooks(): void
@@ -360,7 +374,8 @@ class GraphQL
     }
 
     /**
-     * Remove all hooks registered by this instance.
+     * Remove DB hooks registered by the constructor.
+     * Note: does NOT remove WPGraphQL hooks — only called before activate_wpgraphql_hooks().
      */
     public function deactivate(): void
     {
@@ -372,20 +387,8 @@ class GraphQL
 
     private function register_db_hooks(): void
     {
-        $this->db_hook_callback = function ($query_data, $query, $query_time, $query_callstack, $query_start) {
-            $backtrace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 15);
-            $source = $this->get_caller_source($backtrace);
-            $query_text = $this->full_query_text ? $query : substr($query, 0, 200);
-
-            $this->collector->add_completed_span(
-                $this->extract_query_type($query),
-                Span::TYPE_DB,
-                $source,
-                (float) $query_start,
-                (float) $query_time,
-                ['query' => $query_text]
-            );
-
+        // Minimal passthrough — span creation added in Step 6
+        $this->db_hook_callback = function ($query_data) {
             return $query_data;
         };
         add_filter('log_query_custom_data', $this->db_hook_callback, 10, 5);
@@ -451,11 +454,11 @@ class GraphQL
 - [ ] **Step 4: Run tests**
 
 Run: `vendor/bin/phpunit --filter GraphQLTest`
-Expected: All 3 tests pass
+Expected: All 3 tests pass (constructor/deactivate tests work with the passthrough callback)
 
-- [ ] **Step 5: Write failing test — DB hook creates spans with correct timing**
+- [ ] **Step 5: Write FAILING test — DB hook creates spans with correct timing**
 
-Add to `GraphQLTest.php`:
+Add to `GraphQLTest.php`. This test will FAIL because the current `register_db_hooks()` is a passthrough that doesn't create spans:
 
 ```php
 public function test_db_hook_creates_span_with_correct_timing(): void
@@ -490,10 +493,42 @@ public function test_db_hook_creates_span_with_correct_timing(): void
 }
 ```
 
-- [ ] **Step 6: Run test**
+- [ ] **Step 5b: Run test to verify it fails**
 
 Run: `vendor/bin/phpunit --filter test_db_hook_creates_span_with_correct_timing`
-Expected: PASS (implementation already done)
+Expected: FAIL — `assertCount(1, $trace->spans)` fails because passthrough creates no spans
+
+- [ ] **Step 6: Implement full `register_db_hooks()` with span creation**
+
+Replace the minimal passthrough in `src/GraphQL.php`:
+
+```php
+private function register_db_hooks(): void
+{
+    $this->db_hook_callback = function ($query_data, $query, $query_time, $query_callstack, $query_start) {
+        $backtrace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 15);
+        $source = $this->get_caller_source($backtrace);
+        $query_text = $this->full_query_text ? $query : substr($query, 0, 200);
+
+        $this->collector->add_completed_span(
+            $this->extract_query_type($query),
+            Span::TYPE_DB,
+            $source,
+            (float) $query_start,
+            (float) $query_time,
+            ['query' => $query_text]
+        );
+
+        return $query_data;
+    };
+    add_filter('log_query_custom_data', $this->db_hook_callback, 10, 5);
+}
+```
+
+- [ ] **Step 6b: Run test to verify it passes**
+
+Run: `vendor/bin/phpunit --filter test_db_hook_creates_span_with_correct_timing`
+Expected: PASS
 
 - [ ] **Step 7: Write failing test — query truncation respects setting**
 
@@ -564,7 +599,7 @@ public function test_no_db_spans_after_deactivation(): void
 - [ ] **Step 10: Run all tests**
 
 Run: `vendor/bin/phpunit --testsuite unit`
-Expected: All pass (126 existing + 6 new = 132)
+Expected: 133 tests pass (126 from Task 1 + 7 new)
 
 - [ ] **Step 11: Commit**
 
@@ -969,11 +1004,9 @@ With:
     // Two-phase GraphQL detection (GRAPHQL_REQUEST not available at plugins_loaded)
     $graphql_endpoint = apply_filters( 'graphql_endpoint', 'graphql' );
     $request_path = isset( $_SERVER['REQUEST_URI'] )
-        ? parse_url( wp_unslash( $_SERVER['REQUEST_URI'] ), PHP_URL_PATH )
+        ? rtrim( parse_url( wp_unslash( $_SERVER['REQUEST_URI'] ), PHP_URL_PATH ) ?: '', '/' )
         : '';
-    $is_likely_graphql = $request_path !== ''
-        && ( $request_path === '/' . $graphql_endpoint
-            || substr( $request_path, -strlen( '/' . $graphql_endpoint ) ) === '/' . $graphql_endpoint );
+    $is_likely_graphql = WPFlame\GraphQL::is_graphql_endpoint( $request_path, $graphql_endpoint );
 
     global $wpdb;
     $graphql_inst = null;
@@ -1064,7 +1097,7 @@ With:
 - [ ] **Step 4: Run all existing tests to verify no regressions**
 
 Run: `vendor/bin/phpunit --testsuite unit`
-Expected: All pass (existing 122 + new tests from Tasks 1-4)
+Expected: ~148 tests pass (122 existing + ~26 new from Tasks 1-4)
 
 - [ ] **Step 5: Commit**
 
@@ -1082,45 +1115,42 @@ git commit -m "feat: two-phase GraphQL detection with tiered instrumentation dis
 **Files:**
 - Modify: `tests/Unit/GraphQLTest.php`
 
-- [ ] **Step 1: Write URL heuristic tests**
+- [ ] **Step 1: Write URL heuristic tests against `GraphQL::is_graphql_endpoint()`**
 
-Add a helper method and tests to `GraphQLTest.php`. The URL heuristic logic is inline in `wp-flame.php`, but we can test the same logic pattern:
+Tests call the actual static method (not a replicated copy). The method expects `$request_path` to already have the trailing slash stripped (done by `rtrim()` in `wp-flame.php`):
 
 ```php
-/**
- * Replicate the URL heuristic from wp-flame.php for unit testing.
- */
-private function url_matches_graphql(string $uri, string $endpoint = 'graphql'): bool
-{
-    $request_path = parse_url($uri, PHP_URL_PATH);
-    if ($request_path === false || $request_path === null) {
-        return false;
-    }
-    return $request_path === '/' . $endpoint
-        || substr($request_path, -strlen('/' . $endpoint)) === '/' . $endpoint;
-}
-
 public function test_url_heuristic_matches_graphql_endpoint(): void
 {
-    $this->assertTrue($this->url_matches_graphql('/graphql'));
-    $this->assertTrue($this->url_matches_graphql('/graphql?query=test'));
-    $this->assertTrue($this->url_matches_graphql('/wp/graphql'));
-    $this->assertTrue($this->url_matches_graphql('/index.php/graphql'));
+    $this->assertTrue(GraphQL::is_graphql_endpoint('/graphql'));
+    $this->assertTrue(GraphQL::is_graphql_endpoint('/wp/graphql'));
+    $this->assertTrue(GraphQL::is_graphql_endpoint('/index.php/graphql'));
 }
 
 public function test_url_heuristic_rejects_non_graphql_urls(): void
 {
-    $this->assertFalse($this->url_matches_graphql('/my-page/graphql-tools'));
-    $this->assertFalse($this->url_matches_graphql('/docs/graphql-api'));
-    $this->assertFalse($this->url_matches_graphql('/'));
-    $this->assertFalse($this->url_matches_graphql('/wp-admin/'));
-    $this->assertFalse($this->url_matches_graphql('/search?q=graphql'));
+    $this->assertFalse(GraphQL::is_graphql_endpoint('/my-page/graphql-tools'));
+    $this->assertFalse(GraphQL::is_graphql_endpoint('/docs/graphql-api'));
+    $this->assertFalse(GraphQL::is_graphql_endpoint('/'));
+    $this->assertFalse(GraphQL::is_graphql_endpoint('/wp-admin/'));
+    $this->assertFalse(GraphQL::is_graphql_endpoint(''));
 }
 
 public function test_url_heuristic_custom_endpoint(): void
 {
-    $this->assertTrue($this->url_matches_graphql('/api', 'api'));
-    $this->assertFalse($this->url_matches_graphql('/graphql', 'api'));
+    $this->assertTrue(GraphQL::is_graphql_endpoint('/api', 'api'));
+    $this->assertFalse(GraphQL::is_graphql_endpoint('/graphql', 'api'));
+}
+
+public function test_url_heuristic_trailing_slash_handled_by_caller(): void
+{
+    // wp-flame.php calls rtrim($path, '/') before passing to is_graphql_endpoint.
+    // Verify the rtrim + method combination works for trailing-slash URLs:
+    $path_with_slash = rtrim('/graphql/', '/');
+    $this->assertTrue(GraphQL::is_graphql_endpoint($path_with_slash));
+
+    $nested_with_slash = rtrim('/wp/graphql/', '/');
+    $this->assertTrue(GraphQL::is_graphql_endpoint($nested_with_slash));
 }
 ```
 
@@ -1145,21 +1175,16 @@ public function test_tier2_mode_has_db_hooks_but_no_resolver_hooks(): void
 
 - [ ] **Step 3: Write Score integration test with resolver spans as slow callback proxies**
 
-Add to `tests/Unit/ScoreTest.php`:
+Add to `tests/Unit/ScoreTest.php` (uses the existing `make_trace()` and `make_span()` helpers already in the class):
 
 ```php
 public function test_score_detects_slow_graphql_resolvers_via_hook_meta(): void
 {
-    // Build a trace with a slow resolver span that has meta['hook']
-    $spans = [
-        new Span('s1', null, 'RootQuery.posts', Span::TYPE_PLUGIN, 'wpgraphql',
-            0.0, 200.0, ['hook' => 'graphql:RootQuery.posts', 'type_name' => 'RootQuery', 'field_key' => 'posts']),
-    ];
+    // Build a resolver span with meta['hook'] — same pattern Score.php:43 checks
+    $resolver_span = $this->make_span('r1', Span::TYPE_PLUGIN, 200.0,
+        ['hook' => 'graphql:RootQuery.posts', 'type_name' => 'RootQuery', 'field_key' => 'posts']);
 
-    $trace = new Trace(
-        'trace-1', '/graphql', 'POST', gmdate('c'),
-        300.0, 1048576, '8.1', '6.4', $spans, []
-    );
+    $trace = $this->make_trace(300.0, [$resolver_span]);
 
     $result = Score::calculate($trace);
 

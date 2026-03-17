@@ -36,11 +36,9 @@ Three tiers, selected at runtime based on what's available:
 ```php
 $graphql_endpoint = apply_filters('graphql_endpoint', 'graphql');
 $request_path = isset($_SERVER['REQUEST_URI'])
-    ? parse_url(wp_unslash($_SERVER['REQUEST_URI']), PHP_URL_PATH)
+    ? rtrim(parse_url(wp_unslash($_SERVER['REQUEST_URI']), PHP_URL_PATH) ?: '', '/')
     : '';
-$is_likely_graphql = $request_path !== ''
-    && ($request_path === '/' . $graphql_endpoint
-        || substr($request_path, -strlen('/' . $graphql_endpoint)) === '/' . $graphql_endpoint);
+$is_likely_graphql = WPFlame\GraphQL::is_graphql_endpoint($request_path, $graphql_endpoint);
 ```
 
 This matches the exact endpoint path (e.g., `/graphql` or `/wp/graphql`) without false positives from URLs like `/my-page/graphql-tools`. Uses `parse_url()` to strip query strings before comparison.
@@ -97,6 +95,18 @@ class GraphQL {
     }
 
     /**
+     * Check if a request path matches a GraphQL endpoint.
+     * Extracted as static method for testability.
+     */
+    public static function is_graphql_endpoint(string $request_path, string $endpoint = 'graphql'): bool {
+        if ($request_path === '') {
+            return false;
+        }
+        return $request_path === '/' . $endpoint
+            || substr($request_path, -strlen('/' . $endpoint)) === '/' . $endpoint;
+    }
+
+    /**
      * Activate WPGraphQL-specific resolver and operation hooks (Tier 1 only).
      * Called from init:0 after GRAPHQL_REQUEST and function_exists('graphql') are confirmed.
      */
@@ -106,9 +116,10 @@ class GraphQL {
     }
 
     /**
-     * Remove all hooks registered by this instance.
+     * Remove DB hooks registered by the constructor.
      * Called on false-positive detection to avoid double DB span creation
      * when normal $wpdb replacement takes over.
+     * Note: does NOT remove WPGraphQL hooks — only called before activate_wpgraphql_hooks().
      */
     public function deactivate(): void {
         if ($this->db_hook_callback !== null) {
@@ -328,11 +339,9 @@ The `wp_flame_init()` function changes to a two-phase approach:
 // URL-based GraphQL heuristic (GRAPHQL_REQUEST not available yet)
 $graphql_endpoint = apply_filters('graphql_endpoint', 'graphql');
 $request_path = isset($_SERVER['REQUEST_URI'])
-    ? parse_url(wp_unslash($_SERVER['REQUEST_URI']), PHP_URL_PATH)
+    ? rtrim(parse_url(wp_unslash($_SERVER['REQUEST_URI']), PHP_URL_PATH) ?: '', '/')
     : '';
-$is_likely_graphql = $request_path !== ''
-    && ($request_path === '/' . $graphql_endpoint
-        || substr($request_path, -strlen('/' . $graphql_endpoint)) === '/' . $graphql_endpoint);
+$is_likely_graphql = WPFlame\GraphQL::is_graphql_endpoint($request_path, $graphql_endpoint);
 
 global $wpdb;
 $graphql_inst = null;
