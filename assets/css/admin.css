@@ -413,7 +413,7 @@ a.wp-flame-histogram-row.wp-flame-histogram-active {
 .wp-flame-route-comparison {
     display: flex;
     align-items: center;
-    gap: 16px;
+    gap: 24px;
     margin: 8px 0;
     padding: 10px 16px;
     background: #fff;
@@ -425,4 +425,5 @@ a.wp-flame-histogram-row.wp-flame-histogram-active {
 .wp-flame-route-stats {
     color: #646970;
     font-size: 12px;
+    margin-left: 8px;
 }
