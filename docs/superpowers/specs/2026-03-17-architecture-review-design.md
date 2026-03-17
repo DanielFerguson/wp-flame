@@ -36,14 +36,13 @@ $request_meta = apply_filters('wp_flame_trace_meta', $request_meta);
 // After Storage::save_trace() completes
 do_action('wp_flame_trace_stored', $trace, $score_result);
 
-// In Admin (and anywhere Insights::analyze() is called), after analysis
+// In Admin (after Insights::analyze() and Insights::analyze_dashboard()), after analysis
 $insights = apply_filters('wp_flame_insights', $insights, $trace);
-
-// In wp_flame_init(), instrumentor registration
-$instrumentors = apply_filters('wp_flame_instrumentors', $instrumentors);
 ```
 
-**Files affected:** `wp-flame.php` (shutdown handler, init function), `src/Admin.php` (insight rendering).
+Note: The `wp_flame_instrumentors` filter is deferred to Tier 2.1, where the `Instrumentor` interface and the `$instrumentors` array are introduced together. Adding this hook in Tier 1 would have no consumers.
+
+**Files affected:** `wp-flame.php` (shutdown handler), `src/Admin.php` (flame graph insight rendering and dashboard insight rendering).
 
 ---
 
@@ -80,9 +79,9 @@ class Config {
 }
 ```
 
-All `get_option('wp_flame_*')` calls in `wp-flame.php`, `src/Admin.php`, `src/Settings.php`, and the mu-plugin are replaced with `$config->get()`. The `Config` instance is constructed in `wp_flame_init()` and passed to consumers.
+All `get_option('wp_flame_*')` calls are replaced with `$config->get()`. The `Config` instance is constructed in `wp_flame_init()` and passed to consumers.
 
-**Files affected:** All files that call `get_option('wp_flame_*')`.
+**Files affected:** `wp-flame.php`, `src/Settings.php`, `src/DB.php`, `src/GraphQL.php`, `src/CLI.php`, `mu-plugin/wp-flame-early-hooks.php`.
 
 ---
 
@@ -605,6 +604,8 @@ $span_id = array_pop($this->operation_span_stack);
 
 ```php
 public function prune_old($days) {
+    $max_iterations = 200; // Safety cap: 200 * 500 = 100k rows max per run
+    $iterations = 0;
     do {
         $deleted = $this->wpdb->query(
             $this->wpdb->prepare(
@@ -612,7 +613,12 @@ public function prune_old($days) {
                 $days
             )
         );
-    } while ($deleted > 0);
+        if ($deleted === false) {
+            error_log('WP Flame: prune_old() query failed: ' . $this->wpdb->last_error);
+            break;
+        }
+        $iterations++;
+    } while ($deleted > 0 && $iterations < $max_iterations);
 }
 ```
 
@@ -642,15 +648,19 @@ $span_id = array_pop($this->pending_spans[$key]);
 
 **Problem:** `define('SAVEQUERIES', true)` fires on URL-path-based GraphQL detection, even if WPGraphQL isn't installed. False positives cause all queries to be stored in memory for the entire request.
 
-**Change:**
+**Change:** The existing Phase 2 rollback at `init` priority 0 already handles false positives by checking `defined('GRAPHQL_REQUEST') && GRAPHQL_REQUEST`. The `SAVEQUERIES` define persists for that request but has no functional impact beyond minor memory overhead. The fix is to tighten the Phase 1 check:
 
 ```php
-if ($is_likely_graphql && class_exists('WPGraphQL')) {
+// Check if the WPGraphQL plugin directory exists (reliable at plugins_loaded,
+// unlike class_exists('WPGraphQL') which depends on autoloader timing)
+if ($is_likely_graphql && is_dir(WP_PLUGIN_DIR . '/wp-graphql')) {
     if (!defined('SAVEQUERIES')) {
         define('SAVEQUERIES', true);
     }
 }
 ```
+
+This eliminates false positives on sites that don't have WPGraphQL installed at all. Sites that have WPGraphQL installed but receive non-GraphQL requests to a `/graphql` path still hit the Phase 2 rollback.
 
 **Files affected:** `wp-flame.php`.
 
@@ -770,8 +780,9 @@ if ($this->last_error) {
 ## Dependency Graph
 
 ```
+Tier 1.3 (schema versioning) ──► Tier 2.4 (SQL aggregates — adds denormalized columns)
 Tier 1.3 (schema versioning) ──► Tier 2.5 (url_path column)
-Tier 1.1 (hooks) ──► Tier 2.1 (Instrumentor interface)
+Tier 1.1 (hooks) ──► Tier 2.1 (Instrumentor interface — adds wp_flame_instrumentors filter)
 Tier 1.1 (hooks) ──► Tier 2.3 (InsightRule interface)
 Tier 1.2 (Config) ──► Tier 2.1 (Instrumentor uses Config)
 Tier 2.1 (Instrumentor) ──► Tier 2.6 (third wrapping pass)
