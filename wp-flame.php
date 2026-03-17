@@ -446,7 +446,7 @@ function wp_flame_wrap_callbacks( WPFlame\Collector $collector, float $min_ms ):
 
                 // Skip our own plugin's callbacks to avoid self-instrumentation
                 $source = WPFlame\CallbackResolver::resolve_source( $id, $original, $collector );
-                if ( $source['source'] === 'wp-flame' || $source['source'] === 'wordpress-apm-plugin' ) {
+                if ( strpos( $source['source'], 'wp-flame' ) !== false || $source['source'] === 'wordpress-apm-plugin' ) {
                     continue;
                 }
 
