@@ -1,0 +1,16 @@
+{
+  "scripts": {
+    "wp-env:start": "WP_ENV_HOME=.wp-env-home wp-env start",
+    "wp-env:stop": "WP_ENV_HOME=.wp-env-home wp-env stop",
+    "compat:smoke": "bash bin/compat-smoke.sh",
+    "test:js": "node tests/js/run-tests.js"
+  },
+  "devDependencies": {
+    "@wordpress/env": "^11.1.0"
+  },
+  "overrides": {
+    "ajv": "8.20.0",
+    "qs": "6.15.2",
+    "ws": "8.21.0"
+  }
+}

@@ -10,6 +10,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class Score
 {
+    private const MAX_FACTOR_KEY_BYTES = 80;
+    private const MAX_FACTOR_LABEL_BYTES = 120;
+    private const MAX_FACTOR_VALUE_BYTES = 160;
+
     // Grade thresholds
     private const GRADE_A = 90;
     private const GRADE_B = 80;
@@ -61,18 +65,78 @@ class Score
         // Factor 5: Slow Callbacks (15%) — best 0, worst ≥10
         $cb_score = self::interpolate((float) $slow_callback_count, 0.0, 10.0);
 
+        $default_factors = [
+            'response_time'  => [
+                'weight' => 0.35,
+                'score'  => $rt_score,
+                'label'  => esc_html__('Response Time', 'wp-flame'),
+                'value'  => round($trace->total_ms) . 'ms',
+            ],
+            'http_time'      => [
+                'weight' => 0.20,
+                'score'  => $http_score,
+                'label'  => esc_html__('External HTTP', 'wp-flame'),
+                'value'  => round($http_total_ms) . 'ms',
+            ],
+            'query_count'    => [
+                'weight' => 0.15,
+                'score'  => $qc_score,
+                'label'  => esc_html__('DB Queries', 'wp-flame'),
+                'value'  => (string) $trace->query_count,
+            ],
+            'db_ratio'       => [
+                'weight' => 0.15,
+                'score'  => $db_ratio_score,
+                'label'  => esc_html__('DB Time Ratio', 'wp-flame'),
+                'value'  => $trace->total_ms >= 100
+                    ? round($db_ratio_value * 100) . '%'
+                    : '—',
+            ],
+            'slow_callbacks' => [
+                'weight' => 0.15,
+                'score'  => $cb_score,
+                'label'  => esc_html__('Slow Callbacks', 'wp-flame'),
+                'value'  => (string) $slow_callback_count,
+            ],
+        ];
+
         // Allow site profiles to adjust factor weights/scores.
-        $computed_factors = apply_filters( 'wp_flame_score_factors', [
-            'response_time'  => [ 'weight' => 0.35, 'score' => $rt_score ],
-            'http_time'      => [ 'weight' => 0.20, 'score' => $http_score ],
-            'query_count'    => [ 'weight' => 0.15, 'score' => $qc_score ],
-            'db_ratio'       => [ 'weight' => 0.15, 'score' => $db_ratio_score ],
-            'slow_callbacks' => [ 'weight' => 0.15, 'score' => $cb_score ],
-        ], $trace );
+        $computed_factors = apply_filters( 'wp_flame_score_factors', $default_factors, $trace );
+        if ( ! is_array( $computed_factors ) ) {
+            $computed_factors = $default_factors;
+        }
 
         $overall = 0.0;
-        foreach ( $computed_factors as $f ) {
-            $overall += $f['score'] * $f['weight'];
+        $display_factors = [];
+        foreach ( $computed_factors as $key => $f ) {
+            if ( ! is_array( $f ) ) {
+                continue;
+            }
+
+            $default = $default_factors[ $key ] ?? [
+                'label' => ucwords( str_replace( '_', ' ', (string) $key ) ),
+                'value' => '',
+            ];
+
+            $default_score  = self::number( $default['score'] ?? 0, 0.0 );
+            $default_weight = self::number( $default['weight'] ?? 0, 0.0 );
+            $score          = max( 0, min( 100, (int) round( self::number( $f['score'] ?? $default_score, $default_score ) ) ) );
+            $weight         = self::clamp_weight( self::number( $f['weight'] ?? $default_weight, $default_weight ) );
+            $overall += $score * $weight;
+
+            $display_factors[] = [
+                'key'    => self::limit_string( self::display_string( $key, '' ), self::MAX_FACTOR_KEY_BYTES ),
+                'label'  => self::limit_string(
+                    self::display_string( $f['label'] ?? $default['label'], self::display_string( $default['label'], '' ) ),
+                    self::MAX_FACTOR_LABEL_BYTES
+                ),
+                'score'  => $score,
+                'weight' => (int) round( $weight * 100 ),
+                'value'  => self::limit_string(
+                    self::display_string( $f['value'] ?? $default['value'], self::display_string( $default['value'], '' ) ),
+                    self::MAX_FACTOR_VALUE_BYTES
+                ),
+            ];
         }
         $overall = max( 0, min( 100, (int) round( $overall ) ) );
 
@@ -82,45 +146,7 @@ class Score
             'score'   => $overall,
             'grade'   => $grade_info['grade'],
             'color'   => $grade_info['color'],
-            'factors' => [
-                [
-                    'key'    => 'response_time',
-                    'label'  => esc_html__('Response Time', 'wp-flame'),
-                    'score'  => $rt_score,
-                    'weight' => 35,
-                    'value'  => round($trace->total_ms) . 'ms',
-                ],
-                [
-                    'key'    => 'http_time',
-                    'label'  => esc_html__('External HTTP', 'wp-flame'),
-                    'score'  => $http_score,
-                    'weight' => 20,
-                    'value'  => round($http_total_ms) . 'ms',
-                ],
-                [
-                    'key'    => 'query_count',
-                    'label'  => esc_html__('DB Queries', 'wp-flame'),
-                    'score'  => $qc_score,
-                    'weight' => 15,
-                    'value'  => (string) $trace->query_count,
-                ],
-                [
-                    'key'    => 'db_ratio',
-                    'label'  => esc_html__('DB Time Ratio', 'wp-flame'),
-                    'score'  => $db_ratio_score,
-                    'weight' => 15,
-                    'value'  => $trace->total_ms >= 100
-                        ? round($db_ratio_value * 100) . '%'
-                        : '—',
-                ],
-                [
-                    'key'    => 'slow_callbacks',
-                    'label'  => esc_html__('Slow Callbacks', 'wp-flame'),
-                    'score'  => $cb_score,
-                    'weight' => 15,
-                    'value'  => (string) $slow_callback_count,
-                ],
-            ],
+            'factors' => $display_factors,
         ];
     }
 
@@ -176,5 +202,73 @@ class Score
             return 0;
         }
         return (int) round(100 * (1 - ($value - $best) / ($worst - $best)));
+    }
+
+    /**
+     * Coerce only scalar numeric values. Filter callbacks should not be able to
+     * trigger PHP warnings by returning arrays or arbitrary objects.
+     *
+     * @param mixed $value
+     */
+    private static function number( $value, float $fallback ): float
+    {
+        if ( is_int( $value ) || is_float( $value ) ) {
+            $number = (float) $value;
+            return is_finite( $number ) ? $number : $fallback;
+        }
+
+        if ( is_string( $value ) && is_numeric( trim( $value ) ) ) {
+            $number = (float) trim( $value );
+            return is_finite( $number ) ? $number : $fallback;
+        }
+
+        return $fallback;
+    }
+
+    /**
+     * @param mixed $value
+     */
+    private static function display_string( $value, string $fallback ): string
+    {
+        if ( is_string( $value ) ) {
+            return $value;
+        }
+
+        if ( is_int( $value ) || is_float( $value ) ) {
+            $number = (float) $value;
+            return is_finite( $number ) ? (string) $value : $fallback;
+        }
+
+        if ( is_bool( $value ) ) {
+            return $value ? '1' : '0';
+        }
+
+        if ( is_object( $value ) && method_exists( $value, '__toString' ) ) {
+            try {
+                return (string) $value;
+            } catch ( \Throwable $e ) {
+                return $fallback;
+            }
+        }
+
+        return $fallback;
+    }
+
+    private static function clamp_weight( float $weight ): float
+    {
+        if ( ! is_finite( $weight ) ) {
+            return 0.0;
+        }
+
+        return max( 0.0, min( 1.0, $weight ) );
+    }
+
+    private static function limit_string( string $value, int $max_bytes ): string
+    {
+        if ( strlen( $value ) <= $max_bytes ) {
+            return $value;
+        }
+
+        return substr( $value, 0, $max_bytes );
     }
 }

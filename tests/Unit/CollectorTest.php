@@ -10,6 +10,7 @@ class CollectorTest extends TestCase
 {
     protected function tearDown(): void
     {
+        unset($_SERVER['REQUEST_URI'], $_SERVER['REQUEST_METHOD']);
         Collector::reset();
     }
 
@@ -38,6 +39,21 @@ class CollectorTest extends TestCase
         $collector = Collector::instance();
         $collector->start_request(1000.0);
         $this->assertTrue($collector->is_initialized());
+    }
+
+    public function test_start_request_clears_previous_spans_and_open_stack(): void
+    {
+        $collector = Collector::instance();
+        $collector->start_request(1000.0);
+
+        $completed = $collector->start_span('Completed', Span::TYPE_CORE, 'test');
+        $collector->end_span($completed);
+        $collector->start_span('Open', Span::TYPE_CORE, 'test');
+
+        $collector->start_request(1001.0);
+        $trace = $collector->get_trace();
+
+        $this->assertCount(0, $trace->spans);
     }
 
     public function test_start_and_end_span_creates_span(): void
@@ -187,6 +203,38 @@ class CollectorTest extends TestCase
         $this->assertCount(0, $trace->spans);
     }
 
+    public function test_stop_freezes_trace_total_duration(): void
+    {
+        $collector = Collector::instance();
+        $collector->start_request(1000.0);
+
+        $collector->stop(1001.25);
+
+        $this->assertSame(1250.0, $collector->get_trace()->total_ms);
+        $this->assertSame(1250.0, $collector->get_trace()->total_ms);
+    }
+
+    public function test_max_span_limit_drops_new_spans_without_corrupting_stack(): void
+    {
+        $collector = Collector::instance();
+        $collector->set_limits(1);
+        $collector->start_request(1000.0);
+
+        $first = $collector->start_span('First', Span::TYPE_CORE, 'test');
+        $second = $collector->start_span('Dropped', Span::TYPE_PLUGIN, 'test');
+
+        $this->assertNotSame('', $first);
+        $this->assertSame('', $second);
+
+        $collector->end_span_filtered($second, 0.0);
+        $collector->end_span($first);
+
+        $trace = $collector->get_trace();
+        $this->assertCount(1, $trace->spans);
+        $this->assertSame('First', $trace->spans[0]->name);
+        $this->assertSame(1, $trace->meta['wp_flame_dropped_spans']);
+    }
+
     public function test_close_open_spans_adds_auto_closed_meta(): void
     {
         $collector = Collector::instance();
@@ -234,6 +282,18 @@ class CollectorTest extends TestCase
 
         $this->assertSame(Span::TYPE_PLUGIN, $result['type']);
         $this->assertSame('woocommerce', $result['source']);
+    }
+
+    public function test_get_source_does_not_treat_sibling_plugin_directory_as_plugin(): void
+    {
+        if (! defined('WP_PLUGIN_DIR')) {
+            define('WP_PLUGIN_DIR', '/var/www/html/wp-content/plugins');
+        }
+
+        $collector = Collector::instance();
+        $result = $collector->get_source_from_file('/var/www/html/wp-content/plugins-extra/foo.php');
+
+        $this->assertNotSame('extra', $result['source']);
     }
 
     public function test_get_source_from_core_file(): void
@@ -404,6 +464,46 @@ class CollectorTest extends TestCase
         $trace = $collector->get_trace(['key' => 'value']);
 
         $this->assertSame('value', $trace->meta['key']);
+    }
+
+    public function test_get_trace_redacts_request_uri_query_values(): void
+    {
+        $_SERVER['REQUEST_URI'] = '/my-account/view-order/123?key=wc_order_secret&token=abc&page=2';
+        $_SERVER['REQUEST_METHOD'] = 'GET';
+
+        $collector = Collector::instance();
+        $collector->start_request(microtime(true));
+
+        $trace = $collector->get_trace();
+
+        $this->assertSame('/my-account/view-order/123?key=[redacted]&token=[redacted]&page=2', $trace->url);
+    }
+
+    public function test_get_trace_tolerates_malformed_server_values(): void
+    {
+        $_SERVER['REQUEST_URI'] = ['not-scalar'];
+        $_SERVER['REQUEST_METHOD'] = ['GET'];
+        $warnings = [];
+
+        set_error_handler(static function (int $errno, string $errstr) use (&$warnings): bool {
+            if ($errno === E_WARNING || $errno === E_NOTICE) {
+                $warnings[] = $errstr;
+            }
+
+            return true;
+        });
+
+        try {
+            $collector = Collector::instance();
+            $collector->start_request(microtime(true));
+            $trace = $collector->get_trace();
+        } finally {
+            restore_error_handler();
+        }
+
+        $this->assertSame([], $warnings);
+        $this->assertSame('/', $trace->url);
+        $this->assertSame('GET', $trace->method);
     }
 
     public function test_add_span_meta_noop_when_span_id_not_found(): void

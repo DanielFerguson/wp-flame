@@ -9,6 +9,10 @@ use WPFlame\InsightRule;
 use WPFlame\Span;
 use WPFlame\Trace;
 
+if ( ! defined( 'ABSPATH' ) ) {
+    exit;
+}
+
 class HighQueryCount implements InsightRule
 {
     public function id(): string

@@ -46,6 +46,22 @@ class SpanTest extends TestCase
         $this->assertSame([], $span->meta);
     }
 
+    public function test_construction_clamps_negative_timings(): void
+    {
+        $span = new Span(
+            'abc-123',
+            null,
+            'Malformed legacy span',
+            Span::TYPE_PHP,
+            'unknown',
+            -10.0,
+            -25.0
+        );
+
+        $this->assertSame(0.0, $span->start_ms);
+        $this->assertSame(0.0, $span->duration_ms);
+    }
+
     public function test_type_constants_exist(): void
     {
         $this->assertSame('core', Span::TYPE_CORE);
@@ -123,5 +139,97 @@ class SpanTest extends TestCase
 
         $span = Span::fromArray($data);
         $this->assertNull($span->parent_id);
+    }
+
+    public function test_from_array_tolerates_missing_fields(): void
+    {
+        $span = Span::fromArray([]);
+
+        $this->assertSame('', $span->id);
+        $this->assertNull($span->parent_id);
+        $this->assertSame('unknown', $span->name);
+        $this->assertSame(Span::TYPE_PHP, $span->type);
+        $this->assertSame('unknown', $span->source);
+        $this->assertSame(0.0, $span->start_ms);
+        $this->assertSame(0.0, $span->duration_ms);
+        $this->assertSame([], $span->meta);
+    }
+
+    public function test_from_array_tolerates_non_scalar_fields_without_warnings(): void
+    {
+        $warnings = [];
+        set_error_handler(static function (int $errno, string $errstr) use (&$warnings): bool {
+            if ($errno === E_WARNING || $errno === E_NOTICE) {
+                $warnings[] = $errstr;
+            }
+
+            return true;
+        });
+
+        try {
+            $span = Span::fromArray([
+                'id'          => ['bad'],
+                'parent_id'   => ['bad'],
+                'name'        => ['bad'],
+                'type'        => ['bad'],
+                'source'      => ['bad'],
+                'start_ms'    => ['bad'],
+                'duration_ms' => ['bad'],
+                'meta'        => 'bad',
+            ]);
+        } finally {
+            restore_error_handler();
+        }
+
+        $this->assertSame([], $warnings);
+        $this->assertSame('', $span->id);
+        $this->assertNull($span->parent_id);
+        $this->assertSame('unknown', $span->name);
+        $this->assertSame(Span::TYPE_PHP, $span->type);
+        $this->assertSame('unknown', $span->source);
+        $this->assertSame(0.0, $span->start_ms);
+        $this->assertSame(0.0, $span->duration_ms);
+        $this->assertSame([], $span->meta);
+    }
+
+    public function test_from_array_rejects_non_finite_timing_values(): void
+    {
+        $span = Span::fromArray([
+            'start_ms'    => '1e9999',
+            'duration_ms' => INF,
+        ]);
+
+        $this->assertSame(0.0, $span->start_ms);
+        $this->assertSame(0.0, $span->duration_ms);
+    }
+
+    public function test_from_array_bounds_legacy_string_fields_and_meta(): void
+    {
+        $meta = [];
+        for ($i = 0; $i < 60; $i++) {
+            $meta['meta_key_' . $i . str_repeat('k', 100)] = str_repeat('value', 200);
+        }
+
+        $span = Span::fromArray([
+            'id'          => str_repeat('i', 300),
+            'parent_id'   => str_repeat('p', 300),
+            'name'        => str_repeat('n', 400),
+            'type'        => str_repeat('t', 80),
+            'source'      => str_repeat('s', 300),
+            'start_ms'    => 1.0,
+            'duration_ms' => 2.0,
+            'meta'        => $meta,
+        ]);
+
+        $this->assertSame(128, strlen($span->id));
+        $this->assertSame(128, strlen((string) $span->parent_id));
+        $this->assertSame(300, strlen($span->name));
+        $this->assertSame(40, strlen($span->type));
+        $this->assertSame(200, strlen($span->source));
+        $this->assertCount(50, $span->meta);
+        $first_key = array_key_first($span->meta);
+        $this->assertIsString($first_key);
+        $this->assertSame(80, strlen($first_key));
+        $this->assertSame(500, strlen($span->meta[$first_key]));
     }
 }

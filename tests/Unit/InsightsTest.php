@@ -6,6 +6,8 @@ namespace WPFlame\Tests\Unit;
 
 use PHPUnit\Framework\TestCase;
 use WPFlame\Insights;
+use WPFlame\Rules\DuplicateDbQueries;
+use WPFlame\Rules\SlowCallbacks;
 use WPFlame\Span;
 use WPFlame\Trace;
 
@@ -92,6 +94,41 @@ class InsightsTest extends TestCase
         $this->assertEmpty($insights);
     }
 
+    public function test_slow_http_request_tolerates_malformed_url(): void
+    {
+        $span = $this->make_span('h1', Span::TYPE_HTTP, 'HTTP', 250.0, null, [
+            'url'    => 'http://',
+            'method' => 'GET',
+            'status' => 0,
+        ]);
+
+        $trace    = $this->make_trace([$span]);
+        $insights = Insights::analyze($trace);
+
+        $this->assertCount(1, $insights);
+        $this->assertStringContainsString('unknown', $insights[0]['title']);
+    }
+
+    public function test_slow_http_request_redacts_legacy_full_url_query_values(): void
+    {
+        $span = $this->make_span('h1', Span::TYPE_HTTP, 'HTTP', 250.0, null, [
+            'url'    => 'https://api.example.com/customer?email=person@example.com&page=2&token=secret',
+            'method' => 'GET',
+            'status' => 200,
+        ]);
+
+        $trace    = $this->make_trace([$span]);
+        $insights = Insights::analyze($trace);
+
+        $this->assertCount(1, $insights);
+        $this->assertStringContainsString('api.example.com/customer', $insights[0]['detail']);
+        $this->assertStringContainsString('page=2', $insights[0]['detail']);
+        $this->assertStringContainsString('email=[redacted]', $insights[0]['detail']);
+        $this->assertStringContainsString('token=[redacted]', $insights[0]['detail']);
+        $this->assertStringNotContainsString('person@example.com', $insights[0]['detail']);
+        $this->assertStringNotContainsString('secret', $insights[0]['detail']);
+    }
+
     // ---------------------------------------------------------------------------
     // Rule 2: duplicate_db_queries
     // ---------------------------------------------------------------------------
@@ -162,6 +199,46 @@ class InsightsTest extends TestCase
         $this->assertCount(1, $insights);
         $this->assertStringContainsString('SELECT', $insights[0]['title']);
         $this->assertSame('info', $insights[0]['severity']); // 3 = info
+    }
+
+    public function test_duplicate_query_rule_bounds_retained_span_ids(): void
+    {
+        $spans = [];
+        for ($i = 0; $i < 60; $i++) {
+            $spans[] = $this->make_span('db-' . $i, Span::TYPE_DB, 'DB', 1.0, null, [
+                'query'      => 'SELECT option_value FROM wp_options',
+                'query_hash' => 'same-query',
+            ]);
+        }
+
+        $rule = new DuplicateDbQueries();
+        $insights = $rule->analyze($this->make_trace($spans));
+
+        $this->assertCount(1, $insights);
+        $this->assertStringContainsString('60 duplicate SELECT', $insights[0]->title);
+        $this->assertCount(50, $insights[0]->affected_span_ids);
+    }
+
+    public function test_duplicate_query_rule_bounds_distinct_groups(): void
+    {
+        $spans = [];
+        for ($group = 0; $group < 105; $group++) {
+            $spans[] = $this->make_span('db-' . $group . '-a', Span::TYPE_DB, 'DB', 1.0, null, [
+                'query'      => 'SELECT option_value FROM wp_options WHERE option_id = ' . $group,
+                'query_hash' => 'query-' . $group,
+            ]);
+            $spans[] = $this->make_span('db-' . $group . '-b', Span::TYPE_DB, 'DB', 1.0, null, [
+                'query'      => 'SELECT option_value FROM wp_options WHERE option_id = ' . $group,
+                'query_hash' => 'query-' . $group,
+            ]);
+        }
+
+        $rule = new DuplicateDbQueries();
+        $insights = $rule->analyze($this->make_trace($spans));
+
+        $this->assertCount(1, $insights);
+        $this->assertStringContainsString('100 distinct queries', $insights[0]->title);
+        $this->assertCount(100, $insights[0]->affected_span_ids);
     }
 
     // ---------------------------------------------------------------------------
@@ -275,6 +352,29 @@ class InsightsTest extends TestCase
         $this->assertEmpty($insights);
     }
 
+    public function test_slow_callback_rule_bounds_output_count_and_labels(): void
+    {
+        $spans = [];
+        for ($i = 0; $i < 25; $i++) {
+            $spans[] = $this->make_span(
+                str_repeat('s', 180) . $i,
+                Span::TYPE_PLUGIN,
+                str_repeat('CallbackName', 30) . $i,
+                75.0,
+                null,
+                ['hook' => str_repeat('very_long_hook_name_', 20) . $i]
+            );
+        }
+
+        $rule = new SlowCallbacks();
+        $insights = $rule->analyze($this->make_trace($spans));
+
+        $this->assertCount(20, $insights);
+        $this->assertLessThan(300, strlen($insights[0]->title));
+        $this->assertStringNotContainsString(str_repeat('CallbackName', 18), $insights[0]->title);
+        $this->assertLessThanOrEqual(128, strlen($insights[0]->affected_span_ids[0]));
+    }
+
     // ---------------------------------------------------------------------------
     // Rule 5: http_during_early_phases
     // ---------------------------------------------------------------------------
@@ -331,6 +431,22 @@ class InsightsTest extends TestCase
         $this->assertStringContainsString('Theme Setup', $insights[0]['title']);
     }
 
+    public function test_http_during_early_phase_tolerates_malformed_url(): void
+    {
+        $phase_span = $this->make_span('lc1', Span::TYPE_CORE, 'Theme Setup', 150.0);
+        $http_span  = $this->make_span('h1', Span::TYPE_HTTP, 'HTTP', 40.0, 'lc1', [
+            'url'    => 'http://',
+            'method' => 'GET',
+            'status' => 0,
+        ]);
+
+        $trace    = $this->make_trace([$phase_span, $http_span]);
+        $insights = Insights::analyze($trace);
+
+        $this->assertCount(1, $insights);
+        $this->assertStringContainsString('http://', $insights[0]['detail']);
+    }
+
     public function test_http_during_early_phase_via_grandparent_produces_warning(): void
     {
         // HTTP span is a grandchild of Init
@@ -363,6 +479,24 @@ class InsightsTest extends TestCase
 
         // The HTTP span is below 100ms so slow_http rule won't fire either;
         // the early-phase rule should also not fire.
+        $early = array_filter($insights, fn($i) => str_contains($i['title'], 'blocks page load'));
+        $this->assertEmpty($early);
+    }
+
+    public function test_http_during_early_phase_ignores_cyclic_parent_chains(): void
+    {
+        $phase_span = $this->make_span('lc1', Span::TYPE_CORE, 'Init', 200.0);
+        $first      = $this->make_span('p1', Span::TYPE_PLUGIN, 'Plugin A', 50.0, 'p2');
+        $second     = $this->make_span('p2', Span::TYPE_PLUGIN, 'Plugin B', 50.0, 'p1');
+        $http_span  = $this->make_span('h1', Span::TYPE_HTTP, 'HTTP', 40.0, 'p1', [
+            'host'   => 'api.example.com',
+            'method' => 'GET',
+            'status' => 200,
+        ]);
+
+        $trace    = $this->make_trace([$phase_span, $first, $second, $http_span]);
+        $insights = Insights::analyze($trace);
+
         $early = array_filter($insights, fn($i) => str_contains($i['title'], 'blocks page load'));
         $this->assertEmpty($early);
     }
@@ -494,6 +628,66 @@ class InsightsTest extends TestCase
         $this->assertEmpty($matches);
     }
 
+    public function test_low_cache_hit_ratio_handles_pathological_counters(): void
+    {
+        $trace = $this->make_trace([], [
+            'cache_backend' => 'Redis_Object_Cache',
+            'cache_hits'    => PHP_INT_MAX,
+            'cache_misses'  => PHP_INT_MAX,
+        ]);
+
+        $insights = Insights::analyze($trace);
+
+        $matches = array_values(array_filter($insights, fn($i) => str_contains($i['title'], 'Low cache hit ratio')));
+        $this->assertCount(1, $matches);
+        $this->assertStringContainsString('50%', $matches[0]['title']);
+    }
+
+    public function test_trace_insight_rules_tolerate_malformed_meta_without_warnings(): void
+    {
+        $trace = $this->make_trace(
+            [
+                $this->make_span('h1', Span::TYPE_HTTP, 'HTTP', 250.0, null, [
+                    'url'    => ['bad'],
+                    'host'   => ['bad'],
+                    'method' => ['GET'],
+                    'status' => ['200'],
+                ]),
+                $this->make_span('d1', Span::TYPE_DB, 'DB', 5.0, null, [
+                    'query'      => ['SELECT 1'],
+                    'query_hash' => ['bad'],
+                ]),
+                $this->make_span('cb1', Span::TYPE_PLUGIN, 'callback', 75.0, null, [
+                    'hook' => ['init'],
+                ]),
+            ],
+            [
+                'cache_backend' => ['WP_Object_Cache'],
+                'cache_hits'    => ['bad'],
+                'cache_misses'  => ['bad'],
+            ]
+        );
+        $warnings = [];
+
+        set_error_handler(static function (int $errno, string $errstr) use (&$warnings): bool {
+            if ($errno === E_WARNING || $errno === E_NOTICE) {
+                $warnings[] = $errstr;
+            }
+
+            return true;
+        });
+
+        try {
+            $insights = Insights::analyze($trace);
+        } finally {
+            restore_error_handler();
+        }
+
+        $this->assertSame([], $warnings);
+        $this->assertCount(1, $insights);
+        $this->assertStringContainsString('unknown', $insights[0]['title']);
+    }
+
     // ---------------------------------------------------------------------------
     // analyze_dashboard() — abuse detection rules
     // ---------------------------------------------------------------------------
@@ -609,6 +803,96 @@ class InsightsTest extends TestCase
         $this->assertEmpty($matches);
     }
 
+    public function test_dashboard_insights_tolerate_malformed_rows_without_warnings(): void
+    {
+        $warnings = [];
+        set_error_handler(static function (int $errno, string $errstr) use (&$warnings): bool {
+            if ($errno === E_WARNING || $errno === E_NOTICE) {
+                $warnings[] = $errstr;
+            }
+
+            return true;
+        });
+
+        try {
+            $insights = Insights::analyze_dashboard(
+                [
+                    'not-a-row',
+                    ['user_id' => ['bad'], 'request_count' => ['bad'], 'total_ms' => ['bad']],
+                ],
+                [
+                    'not-a-row',
+                    ['ip_address' => ['bad'], 'request_count' => ['bad'], 'avg_ms' => ['bad']],
+                ],
+                [
+                    'not-a-row',
+                    ['url' => ['bad'], 'ip_address' => ['bad']],
+                    ['url' => '/wp-json/wp/v2/posts?page[]=1', 'ip_address' => '203.0.113.45'],
+                ]
+            );
+        } finally {
+            restore_error_handler();
+        }
+
+        $this->assertSame([], $warnings);
+        $this->assertSame([], $insights);
+    }
+
+    public function test_sequential_api_pagination_ignores_non_numeric_page_values(): void
+    {
+        $traces = [
+            ['url' => '/wp-json/wc/v3/customers?page=first', 'ip_address' => '203.0.113.45'],
+            ['url' => '/wp-json/wc/v3/customers?page=2', 'ip_address' => '203.0.113.45'],
+            ['url' => '/wp-json/wc/v3/customers?page=3', 'ip_address' => '203.0.113.45'],
+        ];
+
+        $insights = Insights::analyze_dashboard([], [], $traces);
+
+        $matches = array_filter($insights, fn($i) => str_contains($i['title'], 'scraping'));
+        $this->assertEmpty($matches);
+    }
+
+    public function test_dashboard_pagination_analysis_bounds_endpoint_detail_lines(): void
+    {
+        $traces = [];
+        for ($endpoint = 1; $endpoint <= 8; $endpoint++) {
+            for ($page = 1; $page <= 3; $page++) {
+                $traces[] = [
+                    'url'        => '/wp-json/wc/v3/resource-' . $endpoint . '?page=' . $page,
+                    'ip_address' => '203.0.113.45',
+                ];
+            }
+        }
+
+        $insights = Insights::analyze_dashboard([], [], $traces);
+        $matches = array_values(array_filter($insights, fn($i) => str_contains($i['title'], 'scraping')));
+
+        $this->assertCount(1, $matches);
+        $this->assertSame(5, substr_count($matches[0]['detail'], 'pages 1-3'));
+        $this->assertStringContainsString('resource-5', $matches[0]['detail']);
+        $this->assertStringNotContainsString('resource-6', $matches[0]['detail']);
+    }
+
+    public function test_dashboard_pagination_analysis_bounds_trace_rows(): void
+    {
+        $traces = [];
+        for ($i = 1; $i <= 200; $i++) {
+            $traces[] = [
+                'url'        => '/wp-json/wc/v3/noise-' . $i . '?page=1',
+                'ip_address' => '203.0.113.45',
+            ];
+        }
+
+        $traces[] = ['url' => '/wp-json/wc/v3/customers?page=1', 'ip_address' => '203.0.113.45'];
+        $traces[] = ['url' => '/wp-json/wc/v3/customers?page=2', 'ip_address' => '203.0.113.45'];
+        $traces[] = ['url' => '/wp-json/wc/v3/customers?page=3', 'ip_address' => '203.0.113.45'];
+
+        $insights = Insights::analyze_dashboard([], [], $traces);
+        $matches = array_filter($insights, fn($i) => str_contains($i['title'], 'scraping'));
+
+        $this->assertEmpty($matches);
+    }
+
     // ---------------------------------------------------------------------------
     // analyze() returns flat merged array from all rules
     // ---------------------------------------------------------------------------
@@ -641,5 +925,57 @@ class InsightsTest extends TestCase
         $severities = array_column($insights, 'severity');
         $this->assertContains('warning', $severities);
         $this->assertContains('info', $severities);
+    }
+
+    public function test_normalize_skips_malformed_insights_and_coerces_safe_entries(): void
+    {
+        $warnings = [];
+        set_error_handler(static function (int $errno, string $errstr) use (&$warnings): bool {
+            if ($errno === E_WARNING || $errno === E_NOTICE) {
+                $warnings[] = $errstr;
+            }
+
+            return true;
+        });
+
+        try {
+            $normalized = Insights::normalize([
+                'not-an-insight',
+                ['severity' => 'critical', 'title' => ['bad'], 'detail' => new \stdClass()],
+                ['severity' => 'warning', 'title' => 'Valid warning', 'detail' => 'Useful detail'],
+                new \WPFlame\Insight('custom', 'info', 'Object insight', 'Object detail'),
+            ]);
+        } finally {
+            restore_error_handler();
+        }
+
+        $this->assertSame([], $warnings);
+        $this->assertSame([
+            ['severity' => 'warning', 'title' => 'Valid warning', 'detail' => 'Useful detail'],
+            ['severity' => 'info', 'title' => 'Object insight', 'detail' => 'Object detail'],
+        ], $normalized);
+    }
+
+    public function test_normalize_bounds_insight_count_and_text_size(): void
+    {
+        $items = [];
+        for ($i = 0; $i < 25; $i++) {
+            $items[] = [
+                'severity' => 'warning',
+                'title'    => str_repeat('T', 400),
+                'detail'   => str_repeat('D', 2500),
+            ];
+        }
+
+        $normalized = Insights::normalize($items);
+
+        $this->assertCount(20, $normalized);
+        $this->assertSame(300, strlen($normalized[0]['title']));
+        $this->assertSame(2000, strlen($normalized[0]['detail']));
+    }
+
+    public function test_normalize_returns_empty_array_for_non_array_filter_output(): void
+    {
+        $this->assertSame([], Insights::normalize('invalid'));
     }
 }

@@ -4,10 +4,15 @@ declare(strict_types=1);
 
 namespace WPFlame\Rules;
 
+use WPFlame\Config;
 use WPFlame\Insight;
 use WPFlame\InsightRule;
 use WPFlame\Span;
 use WPFlame\Trace;
+
+if ( ! defined( 'ABSPATH' ) ) {
+    exit;
+}
 
 class HttpDuringEarlyPhases implements InsightRule
 {
@@ -56,11 +61,14 @@ class HttpDuringEarlyPhases implements InsightRule
                 continue;
             }
 
-            $url  = $span->meta['url'] ?? '';
-            $host = '';
-            if ($url !== '') {
+            $url  = Config::string_value( $span->meta['url'] ?? '', '' );
+            $host = Config::string_value( $span->meta['host'] ?? '', '' );
+            if ($host === '' && $url !== '') {
                 $parsed = parse_url($url);
-                $host   = $parsed['host'] ?? $url;
+                $host   = is_array($parsed) ? ($parsed['host'] ?? $url) : $url;
+            }
+            if ($host === '') {
+                $host = 'unknown';
             }
 
             $insights[] = new Insight(
@@ -90,8 +98,15 @@ class HttpDuringEarlyPhases implements InsightRule
         array $early_span_ids
     ): ?string {
         $current_id = $span->parent_id;
+        $visited    = [];
 
         while ($current_id !== null) {
+            if (isset($visited[$current_id])) {
+                break;
+            }
+
+            $visited[$current_id] = true;
+
             if (isset($early_span_ids[$current_id])) {
                 return $early_span_ids[$current_id];
             }

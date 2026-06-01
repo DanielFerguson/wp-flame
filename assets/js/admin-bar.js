@@ -4,7 +4,9 @@
     if (!btn) return;
     btn.addEventListener('click', function(e) {
         e.preventDefault();
-        document.cookie = 'wp_flame_force_trace=1;path=/;SameSite=Strict' + (location.protocol === 'https:' ? ';Secure' : '');
+        var nonce = window.wpFlameAdminBar && window.wpFlameAdminBar.forceTraceNonce;
+        if (!nonce) return;
+        document.cookie = 'wp_flame_force_trace=' + encodeURIComponent(nonce) + ';path=/;Max-Age=300;SameSite=Strict' + (location.protocol === 'https:' ? ';Secure' : '');
         location.reload();
     });
 })();

@@ -21,6 +21,7 @@
         }
     },
     "scripts": {
+        "lint": "bash bin/lint-php.sh",
         "test:unit": "phpunit --testsuite unit",
         "test:integration": "WP_TESTS_DIR=/tmp/wordpress-tests-lib phpunit --testsuite integration",
         "test": "phpunit"

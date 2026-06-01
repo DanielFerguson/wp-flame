@@ -48,4 +48,19 @@ class SourceResolverTest extends TestCase
 
         $collector->reset();
     }
+
+    public function test_from_trace_array_skips_malformed_file_values(): void
+    {
+        $collector = Collector::instance();
+        $collector->start_request(microtime(true));
+
+        $result = SourceResolver::from_trace_array($collector, [
+            ['file' => ['not-a-path']],
+            ['file' => null],
+        ]);
+
+        $this->assertSame('wordpress', $result);
+
+        $collector->reset();
+    }
 }

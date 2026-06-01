@@ -58,6 +58,54 @@ class CallbackResolver
     }
 
     /**
+     * Return true when a callback declares by-reference parameters that would be
+     * observed by WordPress for the registered accepted-args count.
+     *
+     * Wrapping those callbacks changes the call boundary and can alter reference
+     * semantics, so deep instrumentation should leave them untouched.
+     */
+    public static function accepts_reference_parameters($callback, int $accepted_args): bool
+    {
+        if ( $accepted_args <= 0 ) {
+            return false;
+        }
+
+        try {
+            $ref = self::get_callback_reflection($callback);
+        } catch (\ReflectionException $e) {
+            return false;
+        }
+
+        foreach ($ref->getParameters() as $index => $parameter) {
+            if ($index >= $accepted_args) {
+                break;
+            }
+
+            if ($parameter->isPassedByReference()) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Return true when a callback returns by reference.
+     *
+     * CallbackWrapper::__invoke() cannot preserve return-by-reference behavior
+     * for arbitrary callbacks, so Deep mode should leave these callbacks
+     * untouched for compatibility.
+     */
+    public static function returns_reference( $callback ): bool
+    {
+        try {
+            return self::get_callback_reflection( $callback )->returnsReference();
+        } catch (\ReflectionException $e) {
+            return false;
+        }
+    }
+
+    /**
      * Clear all caches. Called by Collector::reset() for test isolation.
      */
     public static function reset(): void
@@ -108,25 +156,8 @@ class CallbackResolver
 
     private static function get_callback_filename($callback): string
     {
-        $filename = false;
-
-        if (is_string($callback) && strpos($callback, '::') !== false) {
-            $parts = explode('::', $callback, 2);
-            $ref = new \ReflectionMethod($parts[0], $parts[1]);
-            $filename = $ref->getFileName();
-        } elseif (is_string($callback) && function_exists($callback)) {
-            $ref = new \ReflectionFunction($callback);
-            $filename = $ref->getFileName();
-        } elseif (is_array($callback) && isset($callback[0], $callback[1])) {
-            $ref = new \ReflectionMethod($callback[0], $callback[1]);
-            $filename = $ref->getFileName();
-        } elseif ($callback instanceof \Closure) {
-            $ref = new \ReflectionFunction($callback);
-            $filename = $ref->getFileName();
-        } elseif (is_object($callback) && method_exists($callback, '__invoke')) {
-            $ref = new \ReflectionMethod($callback, '__invoke');
-            $filename = $ref->getFileName();
-        }
+        $ref = self::get_callback_reflection($callback);
+        $filename = $ref->getFileName();
 
         // getFileName() returns false for built-in PHP functions (trim, array_map, etc.)
         if ($filename === false) {
@@ -134,6 +165,32 @@ class CallbackResolver
         }
 
         return $filename;
+    }
+
+    private static function get_callback_reflection($callback): \ReflectionFunctionAbstract
+    {
+        if (is_string($callback) && strpos($callback, '::') !== false) {
+            $parts = explode('::', $callback, 2);
+            return new \ReflectionMethod($parts[0], $parts[1]);
+        }
+
+        if (is_string($callback) && function_exists($callback)) {
+            return new \ReflectionFunction($callback);
+        }
+
+        if (is_array($callback) && isset($callback[0], $callback[1])) {
+            return new \ReflectionMethod($callback[0], $callback[1]);
+        }
+
+        if ($callback instanceof \Closure) {
+            return new \ReflectionFunction($callback);
+        }
+
+        if (is_object($callback) && method_exists($callback, '__invoke')) {
+            return new \ReflectionMethod($callback, '__invoke');
+        }
+
+        throw new \ReflectionException('Unknown callback type');
     }
 
     private static function short_class_name(string $fqcn): string
@@ -144,18 +201,26 @@ class CallbackResolver
 
     private static function relative_path(string $file): string
     {
-        if (defined('WP_PLUGIN_DIR') && strpos($file, WP_PLUGIN_DIR) === 0) {
+        if (defined('WP_PLUGIN_DIR') && self::path_is_inside_directory($file, WP_PLUGIN_DIR)) {
             return substr($file, strlen(WP_PLUGIN_DIR) + 1);
         }
 
-        if (function_exists('get_template_directory') && strpos($file, get_template_directory()) === 0) {
+        if (function_exists('get_template_directory') && self::path_is_inside_directory($file, get_template_directory())) {
             return substr($file, strlen(get_template_directory()) + 1);
         }
 
-        if (defined('ABSPATH') && strpos($file, ABSPATH) === 0) {
+        if (defined('ABSPATH') && self::path_is_inside_directory($file, ABSPATH)) {
             return substr($file, strlen(ABSPATH));
         }
 
         return basename($file);
+    }
+
+    private static function path_is_inside_directory(string $path, string $directory): bool
+    {
+        $path = str_replace('\\', '/', $path);
+        $directory = rtrim(str_replace('\\', '/', $directory), '/');
+
+        return $path === $directory || strpos($path, $directory . '/') === 0;
     }
 }

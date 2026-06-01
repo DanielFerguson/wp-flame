@@ -4,8 +4,23 @@ declare(strict_types=1);
 
 namespace WPFlame;
 
+if ( ! defined( 'ABSPATH' ) ) {
+    exit;
+}
+
 class Config
 {
+    public const DEFAULT_SAMPLE_RATE = 1;
+    public const MAX_SAMPLE_RATE = 1000000;
+    public const DEFAULT_RETENTION_DAYS = 7;
+    public const MAX_RETENTION_DAYS = 365;
+    public const DEFAULT_MAX_SPANS = 2000;
+    public const MIN_MAX_SPANS = 100;
+    public const MAX_MAX_SPANS = 50000;
+    public const DEFAULT_MAX_TRACE_BYTES = 1048576;
+    public const MIN_MAX_TRACE_BYTES = 65536;
+    public const MAX_MAX_TRACE_BYTES = 8388608;
+
     /** @var self|null */
     private static $instance;
 
@@ -58,5 +73,88 @@ class Config
     public function set_override( string $key, $value ): void
     {
         $this->overrides[ $key ] = $value;
+    }
+
+    /**
+     * Normalize WordPress option values into strict booleans.
+     *
+     * @param mixed $value
+     */
+    public static function boolean( $value ): bool
+    {
+        if ( is_bool( $value ) ) {
+            return $value;
+        }
+
+        if ( is_int( $value ) || is_float( $value ) ) {
+            return (int) $value === 1;
+        }
+
+        if ( ! is_string( $value ) ) {
+            if ( is_object( $value ) && method_exists( $value, '__toString' ) ) {
+                try {
+                    $value = (string) $value;
+                } catch ( \Throwable $e ) {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        }
+
+        $value = strtolower( trim( (string) $value ) );
+        return in_array( $value, [ '1', 'true', 'yes', 'on' ], true );
+    }
+
+    /**
+     * Normalize arbitrary option/filter values into a display/runtime string
+     * without triggering PHP array/object conversion warnings.
+     *
+     * @param mixed $value
+     */
+    public static function string_value( $value, string $fallback = '' ): string
+    {
+        if ( is_string( $value ) ) {
+            return $value;
+        }
+
+        if ( is_int( $value ) || is_float( $value ) ) {
+            return (string) $value;
+        }
+
+        if ( is_bool( $value ) ) {
+            return $value ? '1' : '0';
+        }
+
+        if ( is_object( $value ) && method_exists( $value, '__toString' ) ) {
+            try {
+                return (string) $value;
+            } catch ( \Throwable $e ) {
+                return $fallback;
+            }
+        }
+
+        return $fallback;
+    }
+
+    /**
+     * Normalize integer settings that protect runtime or storage overhead.
+     *
+     * @param mixed $value
+     */
+    public static function bounded_int( $value, int $default, int $min, int $max ): int
+    {
+        if ( is_int( $value ) ) {
+            $number = $value;
+        } elseif ( is_float( $value ) ) {
+            $number = is_finite( $value ) ? (int) $value : $default;
+        } elseif ( is_string( $value ) && is_numeric( trim( $value ) ) ) {
+            $float  = (float) trim( $value );
+            $number = is_finite( $float ) ? (int) $float : $default;
+        } else {
+            $number = $default;
+        }
+
+        return min( $max, max( $min, $number ) );
     }
 }

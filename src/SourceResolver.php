@@ -38,7 +38,10 @@ class SourceResolver
                 continue;
             }
 
-            $file = $frame['file'];
+            $file = Config::string_value( $frame['file'], '' );
+            if ( $file === '' ) {
+                continue;
+            }
 
             // Skip wp-includes, wp-admin, and our own plugin
             if ( defined( 'ABSPATH' ) ) {
@@ -49,7 +52,7 @@ class SourceResolver
                     continue;
                 }
             }
-            if ( strpos( $file, $wp_flame_dir ) === 0 ) {
+            if ( self::path_is_inside_directory( $file, $wp_flame_dir ) ) {
                 continue;
             }
 
@@ -58,5 +61,13 @@ class SourceResolver
         }
 
         return 'wordpress';
+    }
+
+    private static function path_is_inside_directory( string $path, string $directory ): bool
+    {
+        $path      = str_replace( '\\', '/', $path );
+        $directory = rtrim( str_replace( '\\', '/', $directory ), '/' );
+
+        return $path === $directory || strpos( $path, $directory . '/' ) === 0;
     }
 }

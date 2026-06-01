@@ -4,13 +4,24 @@ declare(strict_types=1);
 
 namespace WPFlame\Rules;
 
+use WPFlame\Config;
 use WPFlame\Insight;
 use WPFlame\InsightRule;
 use WPFlame\Span;
 use WPFlame\Trace;
 
+if ( ! defined( 'ABSPATH' ) ) {
+    exit;
+}
+
 class DuplicateDbQueries implements InsightRule
 {
+    private const MAX_QUERY_BYTES = 2048;
+    private const MAX_GROUP_KEY_BYTES = 256;
+    private const MAX_GROUPS = 100;
+    private const MAX_SPAN_IDS_PER_GROUP = 50;
+    private const MAX_SPAN_IDS_PER_INSIGHT = 100;
+
     public function id(): string
     {
         return 'duplicate_db_queries';
@@ -31,20 +42,31 @@ class DuplicateDbQueries implements InsightRule
                 continue;
             }
 
-            $query = $span->meta['query'] ?? '';
+            $query = Config::string_value( $span->meta['query'] ?? '', '' );
+            $query = $this->limit_string( $query, self::MAX_QUERY_BYTES );
             if ($query === '') {
                 continue;
             }
 
-            $group_key = $span->meta['query_hash'] ?? $span->meta['query'] ?? '';
+            $group_key = Config::string_value( $span->meta['query_hash'] ?? $span->meta['query'] ?? '', '' );
+            $group_key = $this->limit_string( $group_key, self::MAX_GROUP_KEY_BYTES );
+            if ( $group_key === '' ) {
+                $group_key = $this->limit_string( $query, self::MAX_GROUP_KEY_BYTES );
+            }
 
             if (! isset($groups[$group_key])) {
+                if (count($groups) >= self::MAX_GROUPS) {
+                    continue;
+                }
+
                 $groups[$group_key] = ['count' => 0, 'total_ms' => 0.0, 'query' => $query, 'span_ids' => []];
             }
 
             $groups[$group_key]['count']++;
             $groups[$group_key]['total_ms'] += $span->duration_ms;
-            $groups[$group_key]['span_ids'][] = $span->id;
+            if (count($groups[$group_key]['span_ids']) < self::MAX_SPAN_IDS_PER_GROUP) {
+                $groups[$group_key]['span_ids'][] = $span->id;
+            }
         }
 
         $raw_insights = [];
@@ -100,7 +122,13 @@ class DuplicateDbQueries implements InsightRule
                 if ($item['severity'] === 'warning') {
                     $has_warning = true;
                 }
-                $all_span_ids = array_merge($all_span_ids, $item['span_ids']);
+                foreach ($item['span_ids'] as $span_id) {
+                    if (count($all_span_ids) >= self::MAX_SPAN_IDS_PER_INSIGHT) {
+                        break 2;
+                    }
+
+                    $all_span_ids[] = $span_id;
+                }
             }
 
             $distinct = count($group);
@@ -125,5 +153,14 @@ class DuplicateDbQueries implements InsightRule
         $trimmed = ltrim($query);
         $parts   = preg_split('/\s+/', $trimmed, 2);
         return strtoupper($parts[0] ?? 'SQL');
+    }
+
+    private function limit_string( string $value, int $max_bytes ): string
+    {
+        if ( strlen( $value ) <= $max_bytes ) {
+            return $value;
+        }
+
+        return substr( $value, 0, $max_bytes );
     }
 }

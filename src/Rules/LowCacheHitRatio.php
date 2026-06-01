@@ -4,10 +4,15 @@ declare(strict_types=1);
 
 namespace WPFlame\Rules;
 
+use WPFlame\Config;
 use WPFlame\Insight;
 use WPFlame\InsightRule;
 use WPFlame\Span;
 use WPFlame\Trace;
+
+if ( ! defined( 'ABSPATH' ) ) {
+    exit;
+}
 
 class LowCacheHitRatio implements InsightRule
 {
@@ -28,15 +33,16 @@ class LowCacheHitRatio implements InsightRule
             return [];
         }
 
-        $hits   = (int) $trace->meta['cache_hits'];
-        $misses = (int) ($trace->meta['cache_misses'] ?? 0);
-        $total  = $hits + $misses;
+        $hits   = Config::bounded_int( $trace->meta['cache_hits'], 0, 0, PHP_INT_MAX );
+        $misses = Config::bounded_int( $trace->meta['cache_misses'] ?? 0, 0, 0, PHP_INT_MAX );
+        $ratio_total = (float) $hits + (float) $misses;
+        $total = $hits > PHP_INT_MAX - $misses ? PHP_INT_MAX : $hits + $misses;
 
-        if ($total <= 10) {
+        if ($ratio_total <= 10.0) {
             return [];
         }
 
-        $ratio = (int) round(($hits / $total) * 100);
+        $ratio = (int) round(($hits / $ratio_total) * 100);
 
         if ($ratio >= 80) {
             return [];

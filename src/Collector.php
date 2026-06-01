@@ -13,8 +13,12 @@ class Collector
     private static ?self $instance = null;
 
     private float $request_start = 0.0;
+    private float $request_end = 0.0;
     private bool $initialized = false;
     private bool $stopped = false;
+    private int $next_span_id = 0;
+    private int $max_spans = 0;
+    private int $dropped_span_count = 0;
 
     /** @var array[] Lightweight stack entries: [id, name, type, source, start_ms, meta, parent_id, span_count_at_start] */
     private array $span_stack = [];
@@ -47,7 +51,18 @@ class Collector
     public function start_request(float $microtime): void
     {
         $this->request_start = $microtime;
+        $this->request_end = 0.0;
         $this->initialized = true;
+        $this->stopped = false;
+        $this->next_span_id = 0;
+        $this->dropped_span_count = 0;
+        $this->span_stack = [];
+        $this->spans = [];
+    }
+
+    public function set_limits(int $max_spans): void
+    {
+        $this->max_spans = max(0, $max_spans);
     }
 
     public function is_initialized(): bool
@@ -61,7 +76,12 @@ class Collector
             return '';
         }
 
-        $id = self::generate_uuid();
+        if ($this->span_limit_reached()) {
+            $this->dropped_span_count++;
+            return '';
+        }
+
+        $id = $this->generate_span_id();
         $parent_id = ! empty($this->span_stack)
             ? $this->span_stack[count($this->span_stack) - 1]['id']
             : null;
@@ -84,6 +104,10 @@ class Collector
 
     public function end_span(?string $span_id = null): void
     {
+        if ($span_id === '') {
+            return;
+        }
+
         if ($this->stopped || empty($this->span_stack)) {
             return;
         }
@@ -129,7 +153,12 @@ class Collector
             return '';
         }
 
-        $id = self::generate_uuid();
+        if ($this->span_limit_reached()) {
+            $this->dropped_span_count++;
+            return '';
+        }
+
+        $id = $this->generate_span_id();
         $parent_id = ! empty($this->span_stack)
             ? $this->span_stack[count($this->span_stack) - 1]['id']
             : null;
@@ -157,6 +186,10 @@ class Collector
      */
     public function end_span_filtered(?string $span_id, float $min_ms): void
     {
+        if ($span_id === '') {
+            return;
+        }
+
         if ($this->stopped || empty($this->span_stack)) {
             return;
         }
@@ -217,12 +250,23 @@ class Collector
 
     public function get_trace(array $meta = []): Trace
     {
-        $total_ms = (microtime(true) - $this->request_start) * 1000;
+        $request_end = $this->request_end > 0.0 ? $this->request_end : microtime(true);
+        $total_ms = ($request_end - $this->request_start) * 1000;
+        if ($this->dropped_span_count > 0) {
+            $meta['wp_flame_dropped_spans'] = $this->dropped_span_count;
+        }
+
+        $request_uri = isset($_SERVER['REQUEST_URI'])
+            ? Config::string_value(wp_unslash($_SERVER['REQUEST_URI']), '/')
+            : '/';
+        $request_method = isset($_SERVER['REQUEST_METHOD'])
+            ? Config::string_value(wp_unslash($_SERVER['REQUEST_METHOD']), 'GET')
+            : 'GET';
 
         return new Trace(
             self::generate_uuid(),
-            isset($_SERVER['REQUEST_URI']) ? esc_url_raw(wp_unslash($_SERVER['REQUEST_URI'])) : '/',
-            isset($_SERVER['REQUEST_METHOD']) ? sanitize_text_field(wp_unslash($_SERVER['REQUEST_METHOD'])) : 'GET',
+            Redactor::redact_request_uri($request_uri),
+            sanitize_text_field($request_method),
             gmdate('c'),
             $total_ms,
             (int) memory_get_peak_usage(true),
@@ -250,8 +294,12 @@ class Collector
         }
     }
 
-    public function stop(): void
+    public function stop(?float $microtime = null): void
     {
+        if ( ! $this->stopped ) {
+            $this->request_end = $microtime ?? microtime(true);
+        }
+
         $this->stopped = true;
     }
 
@@ -275,6 +323,18 @@ class Collector
         );
     }
 
+    private function generate_span_id(): string
+    {
+        $this->next_span_id++;
+
+        return 's' . base_convert((string) $this->next_span_id, 10, 36);
+    }
+
+    private function span_limit_reached(): bool
+    {
+        return $this->max_spans > 0 && (count($this->spans) + count($this->span_stack)) >= $this->max_spans;
+    }
+
     /**
      * Resolve a file path to a source attribution array.
      *
@@ -289,26 +349,34 @@ class Collector
         $result = ['type' => Span::TYPE_PHP, 'source' => basename($file_path)];
 
         // Check if file is in a plugin
-        if (defined('WP_PLUGIN_DIR') && strpos($file_path, WP_PLUGIN_DIR) === 0) {
+        if (defined('WP_PLUGIN_DIR') && self::path_is_inside_directory($file_path, WP_PLUGIN_DIR)) {
             $relative = substr($file_path, strlen(WP_PLUGIN_DIR) + 1);
             $parts = explode('/', $relative, 2);
             $result = ['type' => Span::TYPE_PLUGIN, 'source' => $parts[0]];
         }
         // Check if file is in mu-plugins
-        elseif (defined('WPMU_PLUGIN_DIR') && strpos($file_path, WPMU_PLUGIN_DIR) === 0) {
+        elseif (defined('WPMU_PLUGIN_DIR') && self::path_is_inside_directory($file_path, WPMU_PLUGIN_DIR)) {
             $relative = substr($file_path, strlen(WPMU_PLUGIN_DIR) + 1);
             $result = ['type' => Span::TYPE_PLUGIN, 'source' => 'mu:' . explode('/', $relative, 2)[0]];
         }
         // Check if file is in a theme
-        elseif (function_exists('get_template_directory') && strpos($file_path, get_template_directory()) === 0) {
+        elseif (function_exists('get_template_directory') && self::path_is_inside_directory($file_path, get_template_directory())) {
             $result = ['type' => Span::TYPE_THEME, 'source' => basename(get_template_directory())];
         }
         // Check if file is WordPress core
-        elseif (defined('ABSPATH') && strpos($file_path, ABSPATH) === 0) {
+        elseif (defined('ABSPATH') && self::path_is_inside_directory($file_path, ABSPATH)) {
             $result = ['type' => Span::TYPE_CORE, 'source' => 'wordpress'];
         }
 
         self::$source_cache[$file_path] = $result;
         return $result;
+    }
+
+    private static function path_is_inside_directory(string $path, string $directory): bool
+    {
+        $path = str_replace('\\', '/', $path);
+        $directory = rtrim(str_replace('\\', '/', $directory), '/');
+
+        return $path === $directory || strpos($path, $directory . '/') === 0;
     }
 }

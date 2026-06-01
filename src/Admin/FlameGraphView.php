@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace WPFlame\Admin;
 
+use WPFlame\Config;
 use WPFlame\Insights;
 use WPFlame\Score;
 use WPFlame\Storage;
@@ -41,8 +42,8 @@ class FlameGraphView
         echo '</h1>';
 
         // Route comparison: how does this request compare to the average for this URL?
-        $route_stats = $this->storage->get_route_stats($trace->url, 7);
-        if ($route_stats) {
+        $route_stats = $this->route_stats($this->storage->get_route_stats($trace->url, 7));
+        if ($route_stats !== null) {
             $route_path = explode('?', $trace->url, 2)[0];
             $diff_ms    = $trace->total_ms - $route_stats['avg_ms'];
             $diff_pct   = $route_stats['avg_ms'] > 0 ? round(($diff_ms / $route_stats['avg_ms']) * 100) : 0;
@@ -91,14 +92,12 @@ class FlameGraphView
         echo '<span class="wp-flame-stat-value">' . esc_html(round($trace->peak_memory / 1048576)) . '<small>MB</small></span>';
         echo '</div>';
         // Cache stat card (if cache data available)
-        if (isset($trace->meta['cache_hits'])) {
-            $hits = (int) $trace->meta['cache_hits'];
-            $misses = (int) ($trace->meta['cache_misses'] ?? 0);
-            $total = $hits + $misses;
-            $ratio = $total > 0 ? round(($hits / $total) * 100) : 0;
-            $backend = $trace->meta['cache_backend'] ?? 'WP_Object_Cache';
-            // Show short backend name
-            $short_backend = $backend === 'WP_Object_Cache' ? __('In-Memory', 'wp-flame') : str_replace('_Object_Cache', '', $backend);
+        $cache_summary = $this->cache_summary($trace->meta);
+        if ($cache_summary !== null) {
+            $hits = $cache_summary['hits'];
+            $total = $cache_summary['total'];
+            $ratio = $cache_summary['ratio'];
+            $short_backend = $cache_summary['backend'];
 
             echo '<div class="wp-flame-stat">';
             echo '<span class="wp-flame-stat-label">' . esc_html__('CACHE', 'wp-flame') . '</span>';
@@ -120,23 +119,34 @@ class FlameGraphView
 
         // Request context: user, IP, user agent
         echo '<div class="wp-flame-request-context">';
-        $ctx_user_id = (int) ($trace->meta['_row_user_id'] ?? 0);
+        $request_context = $this->request_context($trace->meta);
+        $ctx_user_id = $request_context['user_id'];
         if ($ctx_user_id > 0 && function_exists('get_userdata')) {
             $ctx_user = get_userdata($ctx_user_id);
             if ($ctx_user) {
-                $ctx_roles = implode(', ', $ctx_user->roles);
-                echo '<span>' . esc_html__('User:', 'wp-flame') . ' <strong>' . esc_html($ctx_user->display_name) . '</strong> (' . esc_html($ctx_roles) . ')</span>';
+                $ctx_roles = isset($ctx_user->roles) && is_array($ctx_user->roles)
+                    ? implode(', ', array_map([Config::class, 'string_value'], $ctx_user->roles))
+                    : '';
+                $ctx_display_name = Config::string_value($ctx_user->display_name ?? '', '');
+                if ($ctx_display_name === '') {
+                    $ctx_display_name = '#' . $ctx_user_id;
+                }
+                echo '<span>' . esc_html__('User:', 'wp-flame') . ' <strong>' . esc_html($ctx_display_name) . '</strong>';
+                if ($ctx_roles !== '') {
+                    echo ' (' . esc_html($ctx_roles) . ')';
+                }
+                echo '</span>';
             } else {
                 echo '<span>' . esc_html__('User:', 'wp-flame') . ' ' . esc_html__('Anonymous', 'wp-flame') . '</span>';
             }
         } else {
             echo '<span>' . esc_html__('User:', 'wp-flame') . ' ' . esc_html__('Anonymous', 'wp-flame') . '</span>';
         }
-        $ctx_ip = $trace->meta['_row_ip_address'] ?? '';
+        $ctx_ip = $request_context['ip_address'];
         if ($ctx_ip) {
             echo '<span>' . esc_html__('IP:', 'wp-flame') . ' <strong>' . esc_html($ctx_ip) . '</strong></span>';
         }
-        $ctx_ua = $trace->meta['user_agent'] ?? '';
+        $ctx_ua = $request_context['user_agent'];
         if ($ctx_ua) {
             echo '<span>' . esc_html__('User Agent:', 'wp-flame') . ' ' . esc_html($ctx_ua) . '</span>';
         }
@@ -197,8 +207,8 @@ class FlameGraphView
         echo '<div id="wp-flame-graph"></div>';
         echo '<div id="wp-flame-tooltip" style="display:none"></div>';
 
-        $insights = \WPFlame\Insights::analyze($trace);
-        $insights = apply_filters( 'wp_flame_insights', $insights, $trace );
+        $insights = Insights::analyze($trace);
+        $insights = Insights::normalize( apply_filters( 'wp_flame_insights', $insights, $trace ) );
         if (!empty($insights)) {
             echo '<div class="wp-flame-insights">';
             echo '<h3>' . esc_html__('Insights', 'wp-flame') . '</h3>';
@@ -218,8 +228,98 @@ class FlameGraphView
         // wp_localize_script would convert all values to strings, breaking .toFixed() calls)
         wp_add_inline_script(
             'wp-flame-graph',
-            'window.wpFlameTrace = ' . wp_json_encode($trace->toArray()) . ';',
+            'window.wpFlameTrace = ' . $this->encode_trace_for_script($trace) . ';',
             'before'
         );
+    }
+
+    private function encode_trace_for_script( \WPFlame\Trace $trace ): string
+    {
+        $json = wp_json_encode(
+            $trace->toArray(),
+            JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT
+        );
+
+        return is_string( $json ) ? $json : '{}';
+    }
+
+    /**
+     * @param mixed $stats
+     * @return array{avg_ms: float, min_ms: float, max_ms: float, count: int}|null
+     */
+    private function route_stats($stats): ?array
+    {
+        if (! is_array($stats)) {
+            return null;
+        }
+
+        $min_ms = max(0.0, $this->number($stats['min_ms'] ?? 0, 0.0));
+        $max_ms = max($min_ms, $this->number($stats['max_ms'] ?? 0, 0.0));
+
+        return [
+            'avg_ms' => max(0.0, $this->number($stats['avg_ms'] ?? 0, 0.0)),
+            'min_ms' => $min_ms,
+            'max_ms' => $max_ms,
+            'count'  => Config::bounded_int($stats['count'] ?? 0, 0, 0, PHP_INT_MAX),
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $meta
+     * @return array{user_id: int, ip_address: string, user_agent: string}
+     */
+    private function request_context(array $meta): array
+    {
+        return [
+            'user_id'    => Config::bounded_int($meta['_row_user_id'] ?? 0, 0, 0, PHP_INT_MAX),
+            'ip_address' => Config::string_value($meta['_row_ip_address'] ?? '', ''),
+            'user_agent' => Config::string_value($meta['user_agent'] ?? '', ''),
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $meta
+     * @return array{hits: int, total: int, ratio: int, backend: string}|null
+     */
+    private function cache_summary(array $meta): ?array
+    {
+        if (! array_key_exists('cache_hits', $meta)) {
+            return null;
+        }
+
+        $hits = Config::bounded_int($meta['cache_hits'], 0, 0, PHP_INT_MAX);
+        $misses = Config::bounded_int($meta['cache_misses'] ?? 0, 0, 0, PHP_INT_MAX);
+        $ratio_total = (float) $hits + (float) $misses;
+        $total = $hits > PHP_INT_MAX - $misses ? PHP_INT_MAX : $hits + $misses;
+        $ratio = $ratio_total > 0.0 ? (int) round(($hits / $ratio_total) * 100) : 0;
+        $backend = Config::string_value($meta['cache_backend'] ?? 'WP_Object_Cache', 'WP_Object_Cache');
+        $short_backend = $backend === 'WP_Object_Cache'
+            ? __('In-Memory', 'wp-flame')
+            : str_replace('_Object_Cache', '', $backend);
+
+        return [
+            'hits'    => $hits,
+            'total'   => $total,
+            'ratio'   => $ratio,
+            'backend' => $short_backend,
+        ];
+    }
+
+    /**
+     * @param mixed $value
+     */
+    private function number($value, float $fallback): float
+    {
+        if (is_int($value) || is_float($value)) {
+            $number = (float) $value;
+            return is_finite($number) ? $number : $fallback;
+        }
+
+        if (is_string($value) && is_numeric(trim($value))) {
+            $number = (float) trim($value);
+            return is_finite($number) ? $number : $fallback;
+        }
+
+        return $fallback;
     }
 }

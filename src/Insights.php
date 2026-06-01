@@ -10,6 +10,14 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class Insights
 {
+    private const MAX_INSIGHTS = 20;
+    private const MAX_TITLE_BYTES = 300;
+    private const MAX_DETAIL_BYTES = 2000;
+    private const MAX_DASHBOARD_ROWS = 200;
+    private const MAX_PAGINATION_GROUPS = 100;
+    private const MAX_PAGINATION_PAGES_PER_GROUP = 50;
+    private const MAX_PAGINATION_ENDPOINTS_PER_IP = 5;
+
     /**
      * Run all rules against the trace and return a flat array of insight items.
      *
@@ -31,9 +39,9 @@ class Insights
 
         $insights = $engine->analyze( $trace );
 
-        return array_map( function ( Insight $i ) {
+        return self::normalize( array_map( function ( Insight $i ) {
             return $i->to_array();
-        }, $insights );
+        }, $insights ) );
     }
 
     /**
@@ -46,13 +54,60 @@ class Insights
      */
     public static function analyze_dashboard(array $top_users, array $top_ips, array $traces): array
     {
+        $top_users = array_slice( $top_users, 0, self::MAX_DASHBOARD_ROWS );
+        $top_ips   = array_slice( $top_ips, 0, self::MAX_DASHBOARD_ROWS );
+        $traces    = array_slice( $traces, 0, self::MAX_DASHBOARD_ROWS );
         $insights = [];
 
         $insights = array_merge($insights, self::high_request_rate($top_ips));
         $insights = array_merge($insights, self::high_resource_consumer($top_users));
         $insights = array_merge($insights, self::sequential_api_pagination($traces));
 
-        return $insights;
+        return self::normalize( $insights );
+    }
+
+    /**
+     * Normalize insight arrays after filters so malformed extension output cannot
+     * break admin rendering.
+     *
+     * @param mixed $insights
+     * @return array<int, array{severity: string, title: string, detail: string}>
+     */
+    public static function normalize( $insights ): array
+    {
+        if ( ! is_array( $insights ) ) {
+            return [];
+        }
+
+        $normalized = [];
+        foreach ( $insights as $insight ) {
+            if ( $insight instanceof Insight ) {
+                $insight = $insight->to_array();
+            }
+
+            if ( ! is_array( $insight ) ) {
+                continue;
+            }
+
+            if ( count( $normalized ) >= self::MAX_INSIGHTS ) {
+                break;
+            }
+
+            $title  = self::limit_string( self::display_string( $insight['title'] ?? '', '' ), self::MAX_TITLE_BYTES );
+            $detail = self::limit_string( self::display_string( $insight['detail'] ?? '', '' ), self::MAX_DETAIL_BYTES );
+            if ( $title === '' && $detail === '' ) {
+                continue;
+            }
+
+            $severity = self::display_string( $insight['severity'] ?? 'info', 'info' );
+            $normalized[] = [
+                'severity' => $severity === 'warning' ? 'warning' : 'info',
+                'title'    => $title,
+                'detail'   => $detail,
+            ];
+        }
+
+        return $normalized;
     }
 
     /**
@@ -66,13 +121,17 @@ class Insights
         $insights = [];
 
         foreach ($top_ips as $row) {
-            $count = (int) $row['request_count'];
+            if ( ! is_array( $row ) ) {
+                continue;
+            }
+
+            $count = self::integer( $row['request_count'] ?? 0, 0 );
             if ($count <= 100) {
                 continue;
             }
 
-            $ip     = (string) $row['ip_address'];
-            $avg_ms = (int) round((float) $row['avg_ms']);
+            $ip     = self::display_string( $row['ip_address'] ?? '', '' );
+            $avg_ms = (int) round(self::number( $row['avg_ms'] ?? 0, 0.0 ));
 
             $insights[] = [
                 'severity' => 'warning',
@@ -96,13 +155,17 @@ class Insights
         $insights = [];
 
         foreach ($top_users as $row) {
-            $total_ms = (float) $row['total_ms'];
+            if ( ! is_array( $row ) ) {
+                continue;
+            }
+
+            $total_ms = self::number( $row['total_ms'] ?? 0, 0.0 );
             if ($total_ms <= 60000) {
                 continue;
             }
 
-            $user_id = (int) $row['user_id'];
-            $count   = (int) $row['request_count'];
+            $user_id = self::integer( $row['user_id'] ?? 0, 0 );
+            $count   = self::integer( $row['request_count'] ?? 0, 0 );
             $total_s = round($total_ms / 1000, 1);
 
             if ($user_id > 0 && function_exists('get_userdata')) {
@@ -135,8 +198,12 @@ class Insights
         $groups = [];
 
         foreach ($traces as $row) {
-            $ip  = (string) ($row['ip_address'] ?? '');
-            $url = (string) ($row['url'] ?? '');
+            if ( ! is_array( $row ) ) {
+                continue;
+            }
+
+            $ip  = self::display_string( $row['ip_address'] ?? '', '' );
+            $url = self::limit_string( self::display_string( $row['url'] ?? '', '' ), 2048 );
 
             if ($ip === '') {
                 continue;
@@ -154,18 +221,27 @@ class Insights
             }
 
             $query_string = substr($url, $query_pos + 1);
+            $query_string = self::limit_string( $query_string, 4096 );
             parse_str($query_string, $params);
 
-            if (! isset($params['page'])) {
+            if (! isset($params['page']) || is_array($params['page']) || ! is_numeric($params['page'])) {
                 continue;
             }
 
-            $page     = (int) $params['page'];
+            $page     = max(1, (int) $params['page']);
             $endpoint = substr($url, 0, $query_pos);
             $key      = $ip . '|||' . $endpoint;
 
             if (! isset($groups[$key])) {
+                if (count($groups) >= self::MAX_PAGINATION_GROUPS) {
+                    continue;
+                }
+
                 $groups[$key] = ['ip' => $ip, 'endpoint' => $endpoint, 'pages' => []];
+            }
+
+            if (count($groups[$key]['pages']) >= self::MAX_PAGINATION_PAGES_PER_GROUP) {
+                continue;
             }
 
             $groups[$key]['pages'][] = $page;
@@ -200,6 +276,10 @@ class Insights
             }
 
             $ip = $data['ip'];
+            if (isset($by_ip[$ip]) && count($by_ip[$ip]) >= self::MAX_PAGINATION_ENDPOINTS_PER_IP) {
+                continue;
+            }
+
             $by_ip[$ip][] = sprintf('%s (pages %d-%d)', $data['endpoint'], min($pages), max($pages));
         }
 
@@ -216,5 +296,68 @@ class Insights
         }
 
         return $insights;
+    }
+
+    /**
+     * @param mixed $value
+     */
+    private static function number( $value, float $fallback ): float
+    {
+        if ( is_int( $value ) || is_float( $value ) ) {
+            $number = (float) $value;
+            return is_finite( $number ) ? $number : $fallback;
+        }
+
+        if ( is_string( $value ) && is_numeric( trim( $value ) ) ) {
+            $number = (float) trim( $value );
+            return is_finite( $number ) ? $number : $fallback;
+        }
+
+        return $fallback;
+    }
+
+    /**
+     * @param mixed $value
+     */
+    private static function integer( $value, int $fallback ): int
+    {
+        return (int) round( self::number( $value, (float) $fallback ) );
+    }
+
+    private static function limit_string( string $value, int $max_bytes ): string
+    {
+        if ( strlen( $value ) <= $max_bytes ) {
+            return $value;
+        }
+
+        return substr( $value, 0, $max_bytes );
+    }
+
+    /**
+     * @param mixed $value
+     */
+    private static function display_string( $value, string $fallback ): string
+    {
+        if ( is_string( $value ) ) {
+            return $value;
+        }
+
+        if ( is_int( $value ) || is_float( $value ) ) {
+            return (string) $value;
+        }
+
+        if ( is_bool( $value ) ) {
+            return $value ? '1' : '0';
+        }
+
+        if ( is_object( $value ) && method_exists( $value, '__toString' ) ) {
+            try {
+                return (string) $value;
+            } catch ( \Throwable $e ) {
+                return $fallback;
+            }
+        }
+
+        return $fallback;
     }
 }

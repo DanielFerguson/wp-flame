@@ -9,6 +9,7 @@
 
     var ROW_HEIGHT = 24;
     var MIN_WIDTH_PX = 2;
+    var MAX_RENDER_SPANS = 5000;
     var COLORS = {
         core: '#6c7086',
         plugin: '#7c3aed',
@@ -27,22 +28,35 @@
     }
 
     var trace = window.wpFlameTrace;
-    var spans = trace.spans || [];
+    var rawSpans = Array.isArray(trace.spans) ? trace.spans : [];
+    var spans = [];
+    for (var rawIndex = 0; rawIndex < rawSpans.length; rawIndex++) {
+        if (spans.length >= MAX_RENDER_SPANS) {
+            break;
+        }
+
+        var normalizedSpan = normalizeSpan(rawSpans[rawIndex], rawIndex);
+        if (normalizedSpan) {
+            spans.push(normalizedSpan);
+        }
+    }
 
     // Build tree structure from flat parent_id references
-    var spanMap = {};
+    var spanMap = Object.create(null);
     var roots = [];
     var i, span;
 
     for (i = 0; i < spans.length; i++) {
         span = spans[i];
-        span.children = [];
+        if (spanMap[span.id]) {
+            span.id = span.id + '-' + i;
+        }
         spanMap[span.id] = span;
     }
 
     for (i = 0; i < spans.length; i++) {
         span = spans[i];
-        if (span.parent_id && spanMap[span.parent_id]) {
+        if (span.parent_id && spanMap[span.parent_id] && !wouldCreateCycle(span, spanMap[span.parent_id])) {
             spanMap[span.parent_id].children.push(span);
         } else {
             roots.push(span);
@@ -67,12 +81,65 @@
 
     // View state for zoom
     var viewStart = 0;
-    var viewEnd = trace.total_ms;
+    var viewEnd = toNumber(trace.total_ms, 0);
     var zoomStack = [];
+
+    function safeText(str) {
+        return String(str == null ? '' : str)
+            .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '');
+    }
+
+    function normalizeSpan(raw, index) {
+        if (!raw || typeof raw !== 'object') {
+            return null;
+        }
+
+        var id = safeText(raw.id);
+        if (!id) {
+            id = 'span-' + index;
+        }
+
+        return {
+            id: id,
+            parent_id: safeText(raw.parent_id),
+            name: safeText(raw.name) || 'unknown',
+            type: safeText(raw.type) || 'php',
+            source: safeText(raw.source) || 'unknown',
+            start_ms: Math.max(0, toNumber(raw.start_ms, 0)),
+            duration_ms: Math.max(0, toNumber(raw.duration_ms, 0)),
+            children: []
+        };
+    }
+
+    function wouldCreateCycle(span, parent) {
+        var targetId = span.id;
+        var seen = Object.create(null);
+        var current = parent;
+
+        while (current) {
+            if (current.id === targetId) {
+                return true;
+            }
+
+            if (seen[current.id]) {
+                return true;
+            }
+            seen[current.id] = true;
+
+            current = current.parent_id ? spanMap[current.parent_id] : null;
+        }
+
+        return false;
+    }
+
+    function toNumber(value, fallback) {
+        var number = Number(value);
+        return isFinite(number) ? number : fallback;
+    }
 
     // Escape text for safe use in SVG attributes
     function escapeAttr(str) {
-        return String(str)
+        return safeText(str)
             .replace(/&/g, '&amp;')
             .replace(/"/g, '&quot;')
             .replace(/'/g, '&#39;')
@@ -83,6 +150,9 @@
     var AXIS_HEIGHT = 20; // px reserved at top for time axis
 
     function niceTickInterval(range, targetTicks) {
+        if (!isFinite(range) || range <= 0) {
+            return 1;
+        }
         var roughInterval = range / targetTicks;
         var magnitude = Math.pow(10, Math.floor(Math.log(roughInterval) / Math.LN10));
         var candidates = [1, 2, 5, 10];
@@ -105,6 +175,9 @@
         var FULL_REQUEST_ROW = 1; // extra row for "Full request" bar
         var height = (maxDepth + FULL_REQUEST_ROW) * ROW_HEIGHT + AXIS_HEIGHT + 10;
         var timeRange = viewEnd - viewStart;
+        if (!isFinite(timeRange) || timeRange <= 0) {
+            timeRange = 1;
+        }
 
         var svgParts = [];
         svgParts.push('<svg xmlns="http://www.w3.org/2000/svg" width="' + width + '" height="' + height + '" class="wp-flame-svg">');
@@ -128,8 +201,10 @@
         svgParts.push('<text x="4" y="' + (frY + ROW_HEIGHT - 7) + '" fill="#444" font-size="11" font-family="monospace">Full request</text>');
 
         function renderSpan(s, depth) {
-            var x = ((s.start_ms - viewStart) / timeRange) * width;
-            var w = (s.duration_ms / timeRange) * width;
+            var startMs = toNumber(s.start_ms, 0);
+            var durationMs = Math.max(0, toNumber(s.duration_ms, 0));
+            var x = ((startMs - viewStart) / timeRange) * width;
+            var w = (durationMs / timeRange) * width;
 
             if (w < MIN_WIDTH_PX) w = MIN_WIDTH_PX;
 
@@ -138,14 +213,15 @@
 
             var y = (depth + FULL_REQUEST_ROW) * ROW_HEIGHT + AXIS_HEIGHT;
             var color = COLORS[s.type] || COLORS.php;
-            var pct = trace.total_ms > 0 ? ((s.duration_ms / trace.total_ms) * 100).toFixed(1) : '0.0';
+            var totalMs = toNumber(trace.total_ms, 0);
+            var pct = totalMs > 0 ? ((durationMs / totalMs) * 100).toFixed(1) : '0.0';
 
-            svgParts.push('<g class="wp-flame-span" data-id="' + escapeAttr(s.id) + '" data-name="' + escapeAttr(s.name) + '" data-duration="' + s.duration_ms.toFixed(2) + '" data-source="' + escapeAttr(s.source) + '" data-pct="' + pct + '">');
+            svgParts.push('<g class="wp-flame-span" data-id="' + escapeAttr(s.id) + '" data-name="' + escapeAttr(s.name) + '" data-duration="' + durationMs.toFixed(2) + '" data-source="' + escapeAttr(s.source) + '" data-pct="' + pct + '">');
             svgParts.push('<rect x="' + x.toFixed(1) + '" y="' + y + '" width="' + w.toFixed(1) + '" height="' + (ROW_HEIGHT - 2) + '" fill="' + color + '" rx="2" />');
 
             // Text label (only if wide enough)
             if (w > 40) {
-                var label = s.name;
+                var label = safeText(s.name);
                 var maxChars = Math.floor(w / 7);
                 if (label.length > maxChars) {
                     label = label.substring(0, maxChars - 1) + '\u2026';
@@ -250,9 +326,11 @@
         var s = spanMap[spanId];
         if (!s || s.children.length === 0) return;
 
+        var startMs = toNumber(s.start_ms, 0);
+        var durationMs = Math.max(0, toNumber(s.duration_ms, 0));
         zoomStack.push({ start: viewStart, end: viewEnd });
-        viewStart = s.start_ms;
-        viewEnd = s.start_ms + s.duration_ms;
+        viewStart = startMs;
+        viewEnd = startMs + durationMs;
         render();
     }
 
@@ -267,7 +345,7 @@
     function resetZoom() {
         zoomStack = [];
         viewStart = 0;
-        viewEnd = trace.total_ms;
+        viewEnd = toNumber(trace.total_ms, 0);
         render();
     }
 

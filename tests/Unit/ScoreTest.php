@@ -11,6 +11,11 @@ use WPFlame\Trace;
 
 class ScoreTest extends TestCase
 {
+    protected function tearDown(): void
+    {
+        unset($GLOBALS['wp_flame_test_apply_filters']['wp_flame_score_factors']);
+    }
+
     // ---------------------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------------------
@@ -212,6 +217,130 @@ class ScoreTest extends TestCase
             $this->assertArrayHasKey('weight', $factor);
             $this->assertArrayHasKey('value', $factor);
         }
+    }
+
+    public function test_score_factor_filter_updates_displayed_breakdown(): void
+    {
+        $GLOBALS['wp_flame_test_apply_filters']['wp_flame_score_factors'][] = function (array $factors): array {
+            $factors['response_time']['score'] = 10;
+            $factors['response_time']['weight'] = 1.0;
+            $factors['response_time']['value'] = 'profile override';
+
+            foreach ($factors as $key => $factor) {
+                if ($key !== 'response_time') {
+                    $factors[$key]['weight'] = 0.0;
+                }
+            }
+
+            return $factors;
+        };
+
+        $trace = $this->make_trace(50.0, []);
+        $result = Score::calculate($trace);
+
+        $this->assertSame(10, $result['score']);
+        $this->assertSame(10, $result['factors'][0]['score']);
+        $this->assertSame(100, $result['factors'][0]['weight']);
+        $this->assertSame('profile override', $result['factors'][0]['value']);
+    }
+
+    public function test_score_factor_filter_falls_back_when_callback_returns_non_array(): void
+    {
+        $GLOBALS['wp_flame_test_apply_filters']['wp_flame_score_factors'][] = function (): string {
+            return 'invalid';
+        };
+
+        $trace = $this->make_trace(50.0, []);
+        $result = Score::calculate($trace);
+
+        $this->assertCount(5, $result['factors']);
+        $this->assertSame('response_time', $result['factors'][0]['key']);
+        $this->assertSame('Response Time', $result['factors'][0]['label']);
+    }
+
+    public function test_malformed_score_factor_display_values_fall_back_without_warnings(): void
+    {
+        $GLOBALS['wp_flame_test_apply_filters']['wp_flame_score_factors'][] = function (array $factors): array {
+            $factors['response_time']['label'] = ['not-displayable'];
+            $factors['response_time']['value'] = new \stdClass();
+            $factors['response_time']['score'] = ['not-numeric'];
+            $factors['response_time']['weight'] = ['not-numeric'];
+
+            return $factors;
+        };
+
+        $warnings = [];
+        set_error_handler(static function (int $errno, string $errstr) use (&$warnings): bool {
+            if ($errno === E_WARNING || $errno === E_NOTICE) {
+                $warnings[] = $errstr;
+            }
+
+            return true;
+        });
+
+        try {
+            $trace = $this->make_trace(50.0, []);
+            $result = Score::calculate($trace);
+        } finally {
+            restore_error_handler();
+        }
+
+        $this->assertSame([], $warnings);
+        $this->assertSame('Response Time', $result['factors'][0]['label']);
+        $this->assertSame('50ms', $result['factors'][0]['value']);
+        $this->assertSame(100, $result['factors'][0]['score']);
+        $this->assertSame(35, $result['factors'][0]['weight']);
+    }
+
+    public function test_non_finite_score_factor_values_fall_back_without_collapsing_score(): void
+    {
+        $GLOBALS['wp_flame_test_apply_filters']['wp_flame_score_factors'][] = function (array $factors): array {
+            $factors['response_time']['label'] = INF;
+            $factors['response_time']['value'] = NAN;
+            $factors['response_time']['score'] = '1e9999';
+            $factors['response_time']['weight'] = INF;
+
+            return $factors;
+        };
+
+        $trace = $this->make_trace(50.0, []);
+        $result = Score::calculate($trace);
+
+        $this->assertSame('Response Time', $result['factors'][0]['label']);
+        $this->assertSame('50ms', $result['factors'][0]['value']);
+        $this->assertSame(100, $result['factors'][0]['score']);
+        $this->assertSame(35, $result['factors'][0]['weight']);
+        $this->assertGreaterThanOrEqual(90, $result['score']);
+    }
+
+    public function test_score_factor_filter_bounds_display_strings_and_weights(): void
+    {
+        $GLOBALS['wp_flame_test_apply_filters']['wp_flame_score_factors'][] = function (): array {
+            return [
+                str_repeat('k', 200) => [
+                    'label'  => str_repeat('L', 200),
+                    'value'  => str_repeat('V', 300),
+                    'score'  => 50,
+                    'weight' => 2.5,
+                ],
+                'negative_weight' => [
+                    'label'  => 'Negative',
+                    'value'  => 'ignored',
+                    'score'  => 100,
+                    'weight' => -1,
+                ],
+            ];
+        };
+
+        $trace = $this->make_trace(50.0, []);
+        $result = Score::calculate($trace);
+
+        $this->assertSame(50, $result['score']);
+        $this->assertSame(80, strlen($result['factors'][0]['key']));
+        $this->assertSame(120, strlen($result['factors'][0]['label']));
+        $this->assertSame(160, strlen($result['factors'][0]['value']));
+        $this->assertSame(100, $result['factors'][0]['weight']);
+        $this->assertSame(0, $result['factors'][1]['weight']);
     }
 
     // ---------------------------------------------------------------------------

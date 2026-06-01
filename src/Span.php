@@ -16,6 +16,15 @@ class Span
     public const TYPE_DB     = 'db';
     public const TYPE_HTTP   = 'http';
     public const TYPE_PHP    = 'php';
+    private const MAX_ID_BYTES = 128;
+    private const MAX_NAME_BYTES = 300;
+    private const MAX_TYPE_BYTES = 40;
+    private const MAX_SOURCE_BYTES = 200;
+    private const MAX_META_ENTRIES = 50;
+    private const MAX_META_ARRAY_ENTRIES = 20;
+    private const MAX_META_ARRAY_DEPTH = 2;
+    private const MAX_META_KEY_BYTES = 80;
+    private const MAX_META_STRING_BYTES = 500;
 
     public string $id;
     public ?string $parent_id;
@@ -41,8 +50,8 @@ class Span
         $this->name        = $name;
         $this->type        = $type;
         $this->source      = $source;
-        $this->start_ms    = $start_ms;
-        $this->duration_ms = $duration_ms;
+        $this->start_ms    = is_finite($start_ms) ? max(0.0, $start_ms) : 0.0;
+        $this->duration_ms = is_finite($duration_ms) ? max(0.0, $duration_ms) : 0.0;
         $this->meta        = $meta;
     }
 
@@ -62,15 +71,135 @@ class Span
 
     public static function fromArray(array $data): self
     {
+        $parent_id = $data['parent_id'] ?? null;
+        if ( $parent_id !== null ) {
+            $parent_id = self::limit_string( self::string_value( $parent_id, '' ), self::MAX_ID_BYTES );
+            if ( $parent_id === '' ) {
+                $parent_id = null;
+            }
+        }
+
         return new self(
-            (string) $data['id'],
-            isset($data['parent_id']) ? (string) $data['parent_id'] : null,
-            (string) $data['name'],
-            (string) $data['type'],
-            (string) $data['source'],
-            (float) $data['start_ms'],
-            (float) $data['duration_ms'],
-            (array) ($data['meta'] ?? [])
+            self::limit_string( self::string_value( $data['id'] ?? '', '' ), self::MAX_ID_BYTES ),
+            $parent_id,
+            self::limit_string( self::string_value( $data['name'] ?? 'unknown', 'unknown' ), self::MAX_NAME_BYTES ),
+            self::limit_string( self::string_value( $data['type'] ?? self::TYPE_PHP, self::TYPE_PHP ), self::MAX_TYPE_BYTES ),
+            self::limit_string( self::string_value( $data['source'] ?? 'unknown', 'unknown' ), self::MAX_SOURCE_BYTES ),
+            self::float_value( $data['start_ms'] ?? 0, 0.0 ),
+            self::float_value( $data['duration_ms'] ?? 0, 0.0 ),
+            isset( $data['meta'] ) && is_array( $data['meta'] ) ? self::normalize_meta( $data['meta'] ) : []
         );
+    }
+
+    /**
+     * @param mixed $value
+     */
+    private static function string_value( $value, string $fallback ): string
+    {
+        if ( is_string( $value ) ) {
+            return $value;
+        }
+
+        if ( is_int( $value ) || is_float( $value ) ) {
+            return (string) $value;
+        }
+
+        if ( is_bool( $value ) ) {
+            return $value ? '1' : '0';
+        }
+
+        if ( is_object( $value ) && method_exists( $value, '__toString' ) ) {
+            try {
+                return (string) $value;
+            } catch ( \Throwable $e ) {
+                return $fallback;
+            }
+        }
+
+        return $fallback;
+    }
+
+    private static function limit_string( string $value, int $max_bytes ): string
+    {
+        if ( strlen( $value ) <= $max_bytes ) {
+            return $value;
+        }
+
+        return substr( $value, 0, $max_bytes );
+    }
+
+    /**
+     * @param array<mixed> $meta
+     * @return array<string, mixed>
+     */
+    private static function normalize_meta( array $meta, int $depth = 0 ): array
+    {
+        $normalized = [];
+        $count      = 0;
+        $max_entries = $depth === 0 ? self::MAX_META_ENTRIES : self::MAX_META_ARRAY_ENTRIES;
+
+        foreach ( $meta as $key => $value ) {
+            if ( $count >= $max_entries ) {
+                break;
+            }
+
+            $key = self::limit_string( self::string_value( $key, '' ), self::MAX_META_KEY_BYTES );
+            if ( $key === '' ) {
+                $key = 'meta_' . ( $count + 1 );
+            }
+
+            $value = self::normalize_meta_value( $value, $depth );
+            if ( $value === null ) {
+                continue;
+            }
+
+            $normalized[ $key ] = $value;
+            $count++;
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * @param mixed $value
+     * @return mixed|null
+     */
+    private static function normalize_meta_value( $value, int $depth )
+    {
+        if ( is_bool( $value ) || is_int( $value ) ) {
+            return $value;
+        }
+
+        if ( is_float( $value ) ) {
+            return is_finite( $value ) ? $value : 0.0;
+        }
+
+        if ( is_string( $value ) || ( is_object( $value ) && method_exists( $value, '__toString' ) ) ) {
+            return self::limit_string( self::string_value( $value, '' ), self::MAX_META_STRING_BYTES );
+        }
+
+        if ( is_array( $value ) && $depth < self::MAX_META_ARRAY_DEPTH ) {
+            return self::normalize_meta( $value, $depth + 1 );
+        }
+
+        return null;
+    }
+
+    /**
+     * @param mixed $value
+     */
+    private static function float_value( $value, float $fallback ): float
+    {
+        if ( is_int( $value ) || is_float( $value ) ) {
+            $number = (float) $value;
+            return is_finite( $number ) ? $number : $fallback;
+        }
+
+        if ( is_string( $value ) && is_numeric( trim( $value ) ) ) {
+            $number = (float) trim( $value );
+            return is_finite( $number ) ? $number : $fallback;
+        }
+
+        return $fallback;
     }
 }

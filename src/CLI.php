@@ -10,6 +10,11 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class CLI
 {
+    private const MAX_TRACE_ID_BYTES = 128;
+    private const MAX_URL_BYTES = 2048;
+    private const MAX_METHOD_BYTES = 20;
+    private const MAX_DATE_BYTES = 64;
+
     private Storage $storage;
 
     public function __construct(Storage $storage)
@@ -42,7 +47,7 @@ class CLI
     public function list_traces($args, $assoc_args): void
     {
         $filters = [];
-        $filters['per_page'] = (int) ($assoc_args['limit'] ?? 20);
+        $filters['per_page'] = Config::bounded_int( $assoc_args['limit'] ?? 20, 20, 1, 200 );
         $filters['page'] = 1;
 
         if (!empty($assoc_args['url'])) {
@@ -58,18 +63,7 @@ class CLI
 
         $format = $assoc_args['format'] ?? 'table';
 
-        // Format the data for display
-        $items = array_map(function($row) {
-            return [
-                'trace_id'   => $row['trace_id'],
-                'url'        => $row['url'],
-                'method'     => $row['method'],
-                'duration'   => round((float) $row['total_ms'], 1) . 'ms',
-                'queries'    => $row['query_count'],
-                'memory'     => round((int) $row['peak_memory'] / 1048576, 1) . 'MB',
-                'date'       => $row['created_at'],
-            ];
-        }, $traces);
+        $items = array_map([$this, 'format_trace_row'], $traces);
 
         \WP_CLI\Utils\format_items($format, $items, ['trace_id', 'url', 'method', 'duration', 'queries', 'memory', 'date']);
     }
@@ -91,7 +85,13 @@ class CLI
      */
     public function show($args, $assoc_args): void
     {
-        $trace_id = $args[0];
+        $trace_id = Config::string_value( $args[0] ?? '', '' );
+        $trace_id = $this->limit_string( $trace_id, self::MAX_TRACE_ID_BYTES );
+        if ( $trace_id === '' ) {
+            \WP_CLI::error( 'Missing trace ID.' );
+            return;
+        }
+
         $trace = $this->storage->get_trace($trace_id);
 
         if (!$trace) {
@@ -103,7 +103,8 @@ class CLI
         $data = $trace->toArray();
 
         if ($format === 'json') {
-            \WP_CLI::log(json_encode($data, JSON_PRETTY_PRINT));
+            $json = wp_json_encode( $data, JSON_PRETTY_PRINT | JSON_INVALID_UTF8_SUBSTITUTE );
+            \WP_CLI::log( is_string( $json ) ? $json : '{}' );
         } else {
             \WP_CLI::print_value($data, ['format' => $format]);
         }
@@ -140,8 +141,64 @@ class CLI
             return;
         }
 
-        $days = (int) ($assoc_args['days'] ?? \WPFlame\Config::instance()->get( 'wp_flame_retention_days', 7 ));
+        $days = Config::bounded_int(
+            $assoc_args['days'] ?? Config::instance()->get( 'wp_flame_retention_days', Config::DEFAULT_RETENTION_DAYS ),
+            Config::DEFAULT_RETENTION_DAYS,
+            1,
+            Config::MAX_RETENTION_DAYS
+        );
         $this->storage->prune_old($days);
         \WP_CLI::success("Pruned traces older than {$days} day(s).");
+    }
+
+    /**
+     * @param mixed $row
+     * @return array<string, mixed>
+     */
+    private function format_trace_row($row): array
+    {
+        if (! is_array($row)) {
+            $row = [];
+        }
+
+        $duration_ms = max(0.0, $this->number($row['total_ms'] ?? 0, 0.0));
+        $memory      = Config::bounded_int($row['peak_memory'] ?? 0, 0, 0, PHP_INT_MAX);
+
+        return [
+            'trace_id' => $this->limit_string(Config::string_value($row['trace_id'] ?? '', ''), self::MAX_TRACE_ID_BYTES),
+            'url'      => $this->limit_string(Config::string_value($row['url'] ?? '', ''), self::MAX_URL_BYTES),
+            'method'   => $this->limit_string(Config::string_value($row['method'] ?? '', ''), self::MAX_METHOD_BYTES),
+            'duration' => round($duration_ms, 1) . 'ms',
+            'queries'  => Config::bounded_int($row['query_count'] ?? 0, 0, 0, PHP_INT_MAX),
+            'memory'   => round($memory / 1048576, 1) . 'MB',
+            'date'     => $this->limit_string(Config::string_value($row['created_at'] ?? '', ''), self::MAX_DATE_BYTES),
+        ];
+    }
+
+    /**
+     * @param mixed $value
+     */
+    private function number($value, float $fallback): float
+    {
+        if (is_int($value) || is_float($value)) {
+            $number = (float) $value;
+            return is_finite($number) ? $number : $fallback;
+        }
+
+        if (is_string($value) && is_numeric(trim($value))) {
+            $number = (float) trim($value);
+            return is_finite($number) ? $number : $fallback;
+        }
+
+        return $fallback;
+    }
+
+    private function limit_string(string $value, int $max_bytes): string
+    {
+        if (strlen($value) <= $max_bytes) {
+            return $value;
+        }
+
+        return substr($value, 0, $max_bytes);
     }
 }

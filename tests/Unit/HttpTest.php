@@ -14,6 +14,18 @@ namespace WPFlame {
     if (!function_exists('WPFlame\add_filter')) {
         function add_filter($hook_name, $callback, $priority = 10, $accepted_args = 1): bool
         {
+            $GLOBALS['wp_flame_test_filters'][$hook_name][] = [
+                'callback'      => $callback,
+                'priority'      => $priority,
+                'accepted_args' => $accepted_args,
+            ];
+            $GLOBALS['wp_flame_http_hook_registrations'][] = [
+                'type'          => 'filter',
+                'hook'          => $hook_name,
+                'priority'      => $priority,
+                'accepted_args' => $accepted_args,
+            ];
+
             return true;
         }
     }
@@ -21,6 +33,18 @@ namespace WPFlame {
     if (!function_exists('WPFlame\add_action')) {
         function add_action($hook_name, $callback, $priority = 10, $accepted_args = 1): bool
         {
+            $GLOBALS['wp_flame_test_filters'][$hook_name][] = [
+                'callback'      => $callback,
+                'priority'      => $priority,
+                'accepted_args' => $accepted_args,
+            ];
+            $GLOBALS['wp_flame_http_hook_registrations'][] = [
+                'type'          => 'action',
+                'hook'          => $hook_name,
+                'priority'      => $priority,
+                'accepted_args' => $accepted_args,
+            ];
+
             return true;
         }
     }
@@ -50,6 +74,8 @@ namespace WPFlame\Tests\Unit {
         protected function tearDown(): void
         {
             Collector::reset();
+            unset($GLOBALS['wp_flame_test_filters']);
+            unset($GLOBALS['wp_flame_http_hook_registrations']);
         }
 
         private function make_http(): Http
@@ -57,6 +83,21 @@ namespace WPFlame\Tests\Unit {
             $http = new Http();
             $http->register( Collector::instance() );
             return $http;
+        }
+
+        public function test_registers_http_hooks_at_last_priority_to_reduce_late_preempt_leaks(): void
+        {
+            $GLOBALS['wp_flame_test_filters'] = [];
+
+            $http = new Http();
+            $http->register(Collector::instance());
+
+            $this->assertSame(PHP_INT_MAX, $GLOBALS['wp_flame_test_filters']['pre_http_request'][0]['priority']);
+            $this->assertSame(3, $GLOBALS['wp_flame_test_filters']['pre_http_request'][0]['accepted_args']);
+            $this->assertSame(PHP_INT_MAX, $GLOBALS['wp_flame_test_filters']['http_response'][0]['priority']);
+            $this->assertSame(3, $GLOBALS['wp_flame_test_filters']['http_response'][0]['accepted_args']);
+            $this->assertSame(PHP_INT_MAX, $GLOBALS['wp_flame_test_filters']['http_api_debug'][0]['priority']);
+            $this->assertSame(5, $GLOBALS['wp_flame_test_filters']['http_api_debug'][0]['accepted_args']);
         }
 
         public function test_on_pre_request_creates_span_and_returns_preempt_unchanged(): void
@@ -103,7 +144,8 @@ namespace WPFlame\Tests\Unit {
             $span = $trace->spans[0];
             $this->assertSame(Span::TYPE_HTTP, $span->type);
             $this->assertSame('HTTP stripe.com', $span->name);
-            $this->assertSame('https://stripe.com/v1/charges', $span->meta['url']);
+            $this->assertSame('stripe.com', $span->meta['host']);
+            $this->assertArrayNotHasKey('url', $span->meta);
             $this->assertSame('POST', $span->meta['method']);
         }
 
@@ -147,7 +189,8 @@ namespace WPFlame\Tests\Unit {
             $trace = $collector->get_trace();
             $this->assertCount(1, $trace->spans);
             $this->assertSame(404, $trace->spans[0]->meta['status']);
-            $this->assertSame('https://api.example.com/data', $trace->spans[0]->meta['url']);
+            $this->assertSame('api.example.com', $trace->spans[0]->meta['host']);
+            $this->assertArrayNotHasKey('url', $trace->spans[0]->meta);
             $this->assertSame('GET', $trace->spans[0]->meta['method']);
         }
 
@@ -189,6 +232,47 @@ namespace WPFlame\Tests\Unit {
 
             // Must return $preempt exactly as-is (not modify it)
             $this->assertSame($preempt, $result);
+
+            $trace = $collector->get_trace();
+            $this->assertCount(0, $trace->spans);
+        }
+
+        public function test_full_url_can_be_recorded_when_enabled(): void
+        {
+            $collector = Collector::instance();
+            $collector->start_request(microtime(true));
+
+            $http = new Http(true);
+            $http->register($collector);
+
+            $parsed_args = ['method' => 'GET'];
+            $url = 'https://api.example.com/private?token=secret';
+
+            $http->on_pre_request(false, $parsed_args, $url);
+            $http->on_response(['response' => ['code' => 200]], $parsed_args, $url);
+
+            $trace = $collector->get_trace();
+            $this->assertSame($url, $trace->spans[0]->meta['url']);
+            $this->assertSame('api.example.com', $trace->spans[0]->meta['host']);
+        }
+
+        public function test_full_url_capture_is_bounded(): void
+        {
+            $collector = Collector::instance();
+            $collector->start_request(microtime(true));
+
+            $http = new Http(true);
+            $http->register($collector);
+
+            $parsed_args = ['method' => 'GET'];
+            $url = 'https://api.example.com/' . str_repeat('path-segment/', 300);
+
+            $http->on_pre_request(false, $parsed_args, $url);
+            $http->on_response(['response' => ['code' => 200]], $parsed_args, $url);
+
+            $trace = $collector->get_trace();
+            $this->assertLessThanOrEqual(2048, strlen($trace->spans[0]->meta['url']));
+            $this->assertSame('api.example.com', $trace->spans[0]->meta['host']);
         }
 
         public function test_url_without_host_defaults_to_unknown(): void
@@ -208,6 +292,177 @@ namespace WPFlame\Tests\Unit {
             $trace = $collector->get_trace();
             $this->assertCount(1, $trace->spans);
             $this->assertSame('HTTP unknown', $trace->spans[0]->name);
+        }
+
+        public function test_malformed_url_defaults_to_unknown_host(): void
+        {
+            $collector = Collector::instance();
+            $collector->start_request(microtime(true));
+
+            $http = $this->make_http();
+
+            $parsed_args = ['method' => 'GET'];
+            $url = 'http://';
+
+            $http->on_pre_request(false, $parsed_args, $url);
+            $http->on_response(['response' => ['code' => 0]], $parsed_args, $url);
+
+            $trace = $collector->get_trace();
+            $this->assertCount(1, $trace->spans);
+            $this->assertSame('HTTP unknown', $trace->spans[0]->name);
+        }
+
+        public function test_malformed_filter_inputs_do_not_break_http_tracking(): void
+        {
+            $collector = Collector::instance();
+            $collector->start_request(microtime(true));
+
+            $http = $this->make_http();
+
+            $warnings = [];
+            set_error_handler(static function (int $errno, string $errstr) use (&$warnings): bool {
+                if ($errno === E_WARNING || $errno === E_NOTICE) {
+                    $warnings[] = $errstr;
+                }
+
+                return true;
+            });
+
+            try {
+                $http->on_pre_request(false, ['method' => ['bad']], ['bad-url']);
+                $http->on_response(['response' => ['code' => 200]], ['method' => ['bad']], ['bad-url']);
+            } finally {
+                restore_error_handler();
+            }
+
+            $this->assertSame([], $warnings);
+            $trace = $collector->get_trace();
+            $this->assertCount(1, $trace->spans);
+            $this->assertSame('HTTP unknown', $trace->spans[0]->name);
+            $this->assertSame('GET', $trace->spans[0]->meta['method']);
+        }
+
+        public function test_reentrant_same_url_requests_keep_both_spans(): void
+        {
+            $collector = Collector::instance();
+            $collector->start_request(microtime(true));
+
+            $http = $this->make_http();
+
+            $parsed_args = ['method' => 'GET'];
+            $url = 'https://api.example.com/reentrant';
+
+            $http->on_pre_request(false, $parsed_args, $url);
+            $http->on_pre_request(false, $parsed_args, $url);
+            $http->on_response(['response' => ['code' => 200]], $parsed_args, $url);
+            $http->on_response(['response' => ['code' => 201]], $parsed_args, $url);
+
+            $trace = $collector->get_trace();
+            $this->assertCount(2, $trace->spans);
+            $this->assertSame(200, $trace->spans[0]->meta['status']);
+            $this->assertSame(201, $trace->spans[1]->meta['status']);
+        }
+
+        public function test_http_debug_ignores_non_response_contexts(): void
+        {
+            $collector = Collector::instance();
+            $collector->start_request(microtime(true));
+
+            $http = $this->make_http();
+
+            $parsed_args = ['method' => 'GET'];
+            $url = 'https://api.example.com/data';
+
+            $http->on_pre_request(false, $parsed_args, $url);
+            $http->on_http_debug(null, 'transport_internal', 'WP_Http_Curl', $parsed_args, $url);
+
+            $trace = $collector->get_trace();
+            $this->assertCount(0, $trace->spans);
+
+            $http->on_response(['response' => ['code' => 200]], $parsed_args, $url);
+            $trace = $collector->get_trace();
+            $this->assertCount(1, $trace->spans);
+            $this->assertSame(200, $trace->spans[0]->meta['status']);
+        }
+
+        public function test_http_error_message_is_omitted_by_default(): void
+        {
+            $collector = Collector::instance();
+            $collector->start_request(microtime(true));
+
+            $http = $this->make_http();
+
+            $parsed_args = ['method' => 'GET'];
+            $url = 'https://api.example.com/private?token=secret';
+
+            $http->on_pre_request(false, $parsed_args, $url);
+            $http->on_http_debug(
+                new \WP_Error('http_request_failed', 'Failed for https://api.example.com/private?token=secret'),
+                'response',
+                'WP_Http_Curl',
+                $parsed_args,
+                $url
+            );
+
+            $trace = $collector->get_trace();
+            $this->assertSame(0, $trace->spans[0]->meta['status']);
+            $this->assertSame('http_request_failed', $trace->spans[0]->meta['http_error_code']);
+            $this->assertArrayNotHasKey('http_error', $trace->spans[0]->meta);
+        }
+
+        public function test_http_error_message_requires_full_url_opt_in(): void
+        {
+            $collector = Collector::instance();
+            $collector->start_request(microtime(true));
+
+            $http = new Http(true);
+            $http->register($collector);
+
+            $parsed_args = ['method' => 'GET'];
+            $url = 'https://api.example.com/private?token=secret';
+            $message = 'Failed for https://api.example.com/private?token=secret';
+
+            $http->on_pre_request(false, $parsed_args, $url);
+            $http->on_http_debug(
+                new \WP_Error('http_request_failed', $message),
+                'response',
+                'WP_Http_Curl',
+                $parsed_args,
+                $url
+            );
+
+            $trace = $collector->get_trace();
+            $this->assertSame($message, $trace->spans[0]->meta['http_error']);
+            $this->assertSame($url, $trace->spans[0]->meta['url']);
+        }
+
+        public function test_http_error_code_and_message_are_bounded_when_recorded(): void
+        {
+            $collector = Collector::instance();
+            $collector->start_request(microtime(true));
+
+            $http = new Http(true);
+            $http->register($collector);
+
+            $parsed_args = ['method' => 'GET'];
+            $url = 'https://api.example.com/private?token=secret';
+            $code = 'http_request_failed_' . str_repeat('code', 100);
+            $message = 'Failed for ' . str_repeat('https://api.example.com/private?token=secret ', 40);
+
+            $http->on_pre_request(false, $parsed_args, $url);
+            $http->on_http_debug(
+                new \WP_Error($code, $message),
+                'response',
+                'WP_Http_Curl',
+                $parsed_args,
+                $url
+            );
+
+            $trace = $collector->get_trace();
+            $this->assertLessThanOrEqual(80, strlen($trace->spans[0]->meta['http_error_code']));
+            $this->assertLessThanOrEqual(500, strlen($trace->spans[0]->meta['http_error']));
+            $this->assertStringStartsWith('http_request_failed_', $trace->spans[0]->meta['http_error_code']);
+            $this->assertStringStartsWith('Failed for https://api.example.com/private', $trace->spans[0]->meta['http_error']);
         }
     }
 }

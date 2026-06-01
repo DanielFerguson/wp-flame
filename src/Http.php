@@ -10,11 +10,22 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class Http implements Instrumentor
 {
+    private const MAX_URL_BYTES = 2048;
+    private const MAX_HOST_BYTES = 255;
+    private const MAX_ERROR_CODE_BYTES = 80;
+    private const MAX_ERROR_MESSAGE_BYTES = 500;
+
     /** @var Collector */
     private $collector;
+    private bool $full_url;
 
-    /** @var array<string, string> Maps request key (md5 of url+method) → span ID */
+    /** @var array<string, string[]> Maps request key (md5 of url+method) to pending span IDs */
     private array $pending_spans = [];
+
+    public function __construct( bool $full_url = false )
+    {
+        $this->full_url = $full_url;
+    }
 
     public function is_applicable(): bool
     {
@@ -25,9 +36,9 @@ class Http implements Instrumentor
     {
         $this->collector = $collector;
 
-        add_filter( 'pre_http_request', [ $this, 'on_pre_request' ], 1, 3 );
-        add_filter( 'http_response', [ $this, 'on_response' ], 9999, 3 );
-        add_action( 'http_api_debug', [ $this, 'on_http_debug' ], 9999, 5 );
+        add_filter( 'pre_http_request', [ $this, 'on_pre_request' ], PHP_INT_MAX, 3 );
+        add_filter( 'http_response', [ $this, 'on_response' ], PHP_INT_MAX, 3 );
+        add_action( 'http_api_debug', [ $this, 'on_http_debug' ], PHP_INT_MAX, 5 );
     }
 
     /**
@@ -43,22 +54,25 @@ class Http implements Instrumentor
      */
     public function on_pre_request($preempt, $parsed_args, $url)
     {
-        $parsed = parse_url($url);
-        $host = $parsed['host'] ?? 'unknown';
+        if ( false !== $preempt ) {
+            return $preempt;
+        }
+
+        $url_string = $this->limit_string( $this->string_value( $url, '' ), self::MAX_URL_BYTES );
+        $method = $this->normalize_method( $parsed_args );
+        $parsed = parse_url($url_string);
+        $host = is_array($parsed) ? $this->limit_string( $this->string_value( $parsed['host'] ?? 'unknown', 'unknown' ), self::MAX_HOST_BYTES ) : 'unknown';
 
         $span_id = $this->collector->start_span(
             'HTTP ' . $host,
             Span::TYPE_HTTP,
             $this->get_caller_source(),
-            [
-                'url'    => $url,
-                'method' => strtoupper($parsed_args['method'] ?? 'GET'),
-            ]
+            $this->build_request_meta( $url_string, $method, $host )
         );
 
         // Key by URL + method to handle concurrent tracking
-        $key = md5($url . ($parsed_args['method'] ?? 'GET'));
-        $this->pending_spans[$key] = $span_id;
+        $key = $this->request_key( $url_string, $method );
+        $this->pending_spans[$key][] = $span_id;
 
         return $preempt;
     }
@@ -75,14 +89,18 @@ class Http implements Instrumentor
      */
     public function on_response($response, $parsed_args, $url)
     {
-        $key = md5($url . ($parsed_args['method'] ?? 'GET'));
+        $url_string = $this->limit_string( $this->string_value( $url, '' ), self::MAX_URL_BYTES );
+        $method = $this->normalize_method( $parsed_args );
+        $key = $this->request_key( $url_string, $method );
 
-        if (!isset($this->pending_spans[$key])) {
+        if ( empty( $this->pending_spans[ $key ] ) ) {
             return $response;
         }
 
-        $span_id = $this->pending_spans[$key];
-        unset($this->pending_spans[$key]);
+        $span_id = array_pop( $this->pending_spans[ $key ] );
+        if ( empty( $this->pending_spans[ $key ] ) ) {
+            unset( $this->pending_spans[ $key ] );
+        }
 
         // Add response metadata before closing the span
         $status_code = function_exists('wp_remote_retrieve_response_code')
@@ -111,23 +129,39 @@ class Http implements Instrumentor
      */
     public function on_http_debug( $response, $context, $class, $parsed_args, $url ): void
     {
-        $key = md5( $url . ( $parsed_args['method'] ?? 'GET' ) );
+        if ( $context !== 'response' ) {
+            return;
+        }
 
-        if ( ! isset( $this->pending_spans[ $key ] ) ) {
+        $url_string = $this->limit_string( $this->string_value( $url, '' ), self::MAX_URL_BYTES );
+        $method = $this->normalize_method( $parsed_args );
+        $key = $this->request_key( $url_string, $method );
+
+        if ( empty( $this->pending_spans[ $key ] ) ) {
             return; // Already handled by on_response().
         }
 
-        $span_id = $this->pending_spans[ $key ];
-        unset( $this->pending_spans[ $key ] );
+        $span_id = array_pop( $this->pending_spans[ $key ] );
+        if ( empty( $this->pending_spans[ $key ] ) ) {
+            unset( $this->pending_spans[ $key ] );
+        }
 
-        $meta = [
-            'url'    => $url,
-            'method' => $parsed_args['method'] ?? 'GET',
-        ];
+        $parsed = parse_url( $url_string );
+        $host   = is_array( $parsed ) ? $this->limit_string( $this->string_value( $parsed['host'] ?? 'unknown', 'unknown' ), self::MAX_HOST_BYTES ) : 'unknown';
+        $meta   = $this->build_request_meta( $url_string, $method, $host );
 
         if ( is_wp_error( $response ) ) {
-            $meta['status']     = 0;
-            $meta['http_error'] = $response->get_error_message();
+            $meta['status']          = 0;
+            $meta['http_error_code'] = $this->limit_string(
+                $this->string_value( $response->get_error_code(), '' ),
+                self::MAX_ERROR_CODE_BYTES
+            );
+            if ( $this->full_url ) {
+                $meta['http_error'] = $this->limit_string(
+                    $this->string_value( $response->get_error_message(), '' ),
+                    self::MAX_ERROR_MESSAGE_BYTES
+                );
+            }
         } else {
             $meta['status'] = (int) wp_remote_retrieve_response_code( $response );
         }
@@ -142,5 +176,73 @@ class Http implements Instrumentor
     private function get_caller_source(): string
     {
         return SourceResolver::from_backtrace( $this->collector, 1 );
+    }
+
+    private function build_request_meta( string $url, string $method, string $host ): array
+    {
+        $meta = [
+            'host'   => $host,
+            'method' => $method,
+        ];
+
+        if ( $this->full_url ) {
+            $meta['url'] = $url;
+        }
+
+        return $meta;
+    }
+
+    /**
+     * @param mixed $parsed_args
+     */
+    private function normalize_method( $parsed_args ): string
+    {
+        $method = is_array( $parsed_args ) ? ( $parsed_args['method'] ?? 'GET' ) : 'GET';
+        $method = $this->string_value( $method, 'GET' );
+        $method = strtoupper( trim( $method ) );
+
+        return $method !== '' ? substr( $method, 0, 20 ) : 'GET';
+    }
+
+    private function request_key( string $url, string $method ): string
+    {
+        return md5( $url . "\n" . $method );
+    }
+
+    private function limit_string( string $value, int $max_bytes ): string
+    {
+        if ( strlen( $value ) <= $max_bytes ) {
+            return $value;
+        }
+
+        return substr( $value, 0, $max_bytes );
+    }
+
+    /**
+     * @param mixed $value
+     */
+    private function string_value( $value, string $fallback ): string
+    {
+        if ( is_string( $value ) ) {
+            return $value;
+        }
+
+        if ( is_int( $value ) || is_float( $value ) ) {
+            return (string) $value;
+        }
+
+        if ( is_bool( $value ) ) {
+            return $value ? '1' : '0';
+        }
+
+        if ( is_object( $value ) && method_exists( $value, '__toString' ) ) {
+            try {
+                return (string) $value;
+            } catch ( \Throwable $e ) {
+                return $fallback;
+            }
+        }
+
+        return $fallback;
     }
 }

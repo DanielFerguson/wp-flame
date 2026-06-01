@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace WPFlame\Admin;
 
+use WPFlame\Config;
 use WPFlame\Insights;
 use WPFlame\Score;
 use WPFlame\Storage;
@@ -14,6 +15,16 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class ListView
 {
+    private const MAX_TRACE_ID_BYTES = 128;
+    private const MAX_URL_BYTES = 2048;
+    private const MAX_METHOD_BYTES = 20;
+    private const MAX_TIMESTAMP_BYTES = 64;
+    private const MAX_IP_BYTES = 45;
+    private const MAX_REQUEST_STRING_BYTES = 2048;
+    private const MAX_USER_LABEL_BYTES = 200;
+    private const MAX_ROLE_LABEL_BYTES = 200;
+    private const MAX_CALLBACK_LABEL_BYTES = 200;
+
     /** @var Storage */
     private $storage;
 
@@ -24,64 +35,9 @@ class ListView
 
     public function render(): void
     {
-        $filters = [];
-
-        if (! empty($_GET['s'])) {
-            $filters['url'] = sanitize_text_field(wp_unslash($_GET['s']));
-        }
-        if (! empty($_GET['min_duration'])) {
-            $filters['min_duration'] = (float) wp_unslash($_GET['min_duration']);
-        }
-        if (isset($_GET['max_duration']) && $_GET['max_duration'] !== '') {
-            $filters['max_duration'] = (float) wp_unslash($_GET['max_duration']);
-        }
-        if (! empty($_GET['method'])) {
-            $filters['method'] = sanitize_text_field(wp_unslash($_GET['method']));
-        }
-        if (! empty($_GET['type'])) {
-            $type = sanitize_text_field(wp_unslash($_GET['type']));
-            if ($type === 'cron') {
-                $filters['url'] = 'wp-cron.php';
-            } elseif ($type === 'ajax') {
-                $filters['url'] = 'admin-ajax.php';
-            } elseif ($type === 'rest') {
-                $filters['url'] = 'wp-json';
-            } elseif ($type === 'graphql') {
-                $filters['url'] = '/graphql';
-            }
-        }
-        if (isset($_GET['user_id']) && $_GET['user_id'] !== '') {
-            $filters['user_id'] = (int) wp_unslash($_GET['user_id']);
-        }
-        if (! empty($_GET['ip_address'])) {
-            $filters['ip_address'] = sanitize_text_field(wp_unslash($_GET['ip_address']));
-        }
-        if (! empty($_GET['grade'])) {
-            $grade = strtoupper(sanitize_text_field(wp_unslash($_GET['grade'])));
-            $grade_ranges = [
-                'A' => [90, 100],
-                'B' => [80, 89],
-                'C' => [70, 79],
-                'D' => [60, 69],
-                'F' => [0, 59],
-            ];
-            if (isset($grade_ranges[$grade])) {
-                $filters['min_score'] = $grade_ranges[$grade][0];
-                $filters['max_score'] = $grade_ranges[$grade][1];
-            }
-        }
-        if (! empty($_GET['orderby'])) {
-            $filters['orderby'] = sanitize_text_field(wp_unslash($_GET['orderby']));
-        }
-        if (! empty($_GET['order'])) {
-            $filters['order'] = sanitize_text_field(wp_unslash($_GET['order']));
-        }
-
-        $paged    = max(1, (int) wp_unslash($_GET['paged'] ?? 1));
-        $per_page = 20;
-
-        $filters['page']     = $paged;
-        $filters['per_page'] = $per_page;
+        $filters  = $this->filters_from_request($_GET);
+        $paged    = (int) $filters['page'];
+        $per_page = (int) $filters['per_page'];
 
         $traces = $this->storage->list_traces($filters);
         $total  = $this->storage->count_traces($filters);
@@ -131,7 +87,7 @@ class ListView
             } elseif (function_exists('get_userdata')) {
                 $filter_user = get_userdata($filters['user_id']);
                 if ($filter_user) {
-                    $user_label = esc_html($filter_user->display_name);
+                    $user_label = esc_html($this->user_display_name($filter_user, (int) $filters['user_id']));
                 }
             }
             echo '<div class="notice notice-info inline" style="margin:8px 0"><p>';
@@ -160,7 +116,7 @@ class ListView
         echo '<form method="get">';
         echo '<input type="hidden" name="page" value="wp-flame">';
         echo '<div class="tablenav top"><div class="alignleft">';
-        $current_type = isset($_GET['type']) ? sanitize_text_field(wp_unslash($_GET['type'])) : '';
+        $current_type = $this->request_string($_GET, 'type');
         echo ' <select name="type" style="height:30px;vertical-align:top">';
         echo '<option value="">' . esc_html__('All Types', 'wp-flame') . '</option>';
         echo '<option value="cron"' . selected($current_type, 'cron', false) . '>' . esc_html__('Cron', 'wp-flame') . '</option>';
@@ -179,7 +135,7 @@ class ListView
         echo ' <input type="number" name="min_duration" value="' . esc_attr(isset($filters['min_duration']) ? (string) $filters['min_duration'] : '') . '" placeholder="' . esc_attr__('Min ms...', 'wp-flame') . '" step="any" style="width:100px">';
 
         // Grade filter
-        $current_grade = isset($_GET['grade']) ? strtoupper(sanitize_text_field(wp_unslash($_GET['grade']))) : '';
+        $current_grade = strtoupper($this->request_string($_GET, 'grade'));
         echo ' <select name="grade" style="height:30px;vertical-align:top">';
         echo '<option value="">' . esc_html__('All Grades', 'wp-flame') . '</option>';
         foreach (['A', 'B', 'C', 'D', 'F'] as $g) {
@@ -188,32 +144,44 @@ class ListView
         echo '</select>';
 
         // User filter
-        $current_user_filter = isset($_GET['user_id']) && $_GET['user_id'] !== '' ? (int) wp_unslash($_GET['user_id']) : '';
+        $current_user_filter = $this->request_string($_GET, 'user_id') !== '' ? (int) $this->request_string($_GET, 'user_id') : '';
         $distinct_users = $this->storage->get_distinct_users();
         echo ' <select name="user_id" style="height:30px;vertical-align:top">';
         echo '<option value="">' . esc_html__('All Users', 'wp-flame') . '</option>';
         foreach ($distinct_users as $u) {
-            $uid = (int) $u['user_id'];
+            if (! is_array($u)) {
+                continue;
+            }
+
+            $uid = $this->row_int($u, 'user_id', 0, 0, PHP_INT_MAX);
             if ($uid === 0) {
                 $label = __('Anonymous', 'wp-flame');
             } else {
                 $user_data = get_userdata($uid);
-                $label = $user_data ? $user_data->display_name : '#' . $uid;
+                $label = $user_data ? $this->user_display_name($user_data, $uid) : '#' . $uid;
             }
-            $label .= ' (' . (int) $u['request_count'] . ')';
+            $label .= ' (' . $this->row_int($u, 'request_count', 0, 0, PHP_INT_MAX) . ')';
             $sel = ($current_user_filter !== '' && $current_user_filter === $uid) ? ' selected' : '';
             echo '<option value="' . esc_attr((string) $uid) . '"' . $sel . '>' . esc_html($label) . '</option>';
         }
         echo '</select>';
 
         // IP filter
-        $current_ip_filter = isset($_GET['ip_address']) ? sanitize_text_field(wp_unslash($_GET['ip_address'])) : '';
+        $current_ip_filter = $this->request_string($_GET, 'ip_address');
         $distinct_ips = $this->storage->get_distinct_ips();
         echo ' <select name="ip_address" style="height:30px;vertical-align:top">';
         echo '<option value="">' . esc_html__('All IPs', 'wp-flame') . '</option>';
         foreach ($distinct_ips as $ip_row) {
-            $ip = (string) $ip_row['ip_address'];
-            $ip_label = $ip . ' (' . (int) $ip_row['request_count'] . ')';
+            if (! is_array($ip_row)) {
+                continue;
+            }
+
+            $ip = $this->row_string($ip_row, 'ip_address');
+            if ($ip === '') {
+                continue;
+            }
+
+            $ip_label = $ip . ' (' . $this->row_int($ip_row, 'request_count', 0, 0, PHP_INT_MAX) . ')';
             echo '<option value="' . esc_attr($ip) . '"' . selected($current_ip_filter, $ip, false) . '>' . esc_html($ip_label) . '</option>';
         }
         echo '</select>';
@@ -263,18 +231,26 @@ class ListView
         }
 
         foreach ($traces as $row) {
-            $is_slow  = ((float) $row['total_ms'] > 500);
+            $row = $this->trace_row($row);
+            if ($row === null) {
+                continue;
+            }
+
+            $is_slow  = ($row['total_ms'] > 500);
             $view_url = admin_url('tools.php?page=wp-flame&trace_id=' . urlencode($row['trace_id']));
-            $mem_mb   = round((int) $row['peak_memory'] / 1048576, 1);
+            $mem_mb   = round($row['peak_memory'] / 1048576, 1);
 
             // Resolve user display info
-            $row_user_id = (int) ($row['user_id'] ?? 0);
+            $row_user_id = $row['user_id'];
             if ($row_user_id > 0 && function_exists('get_userdata')) {
                 $row_user = get_userdata($row_user_id);
                 if ($row_user) {
-                    $row_user_roles = implode(', ', $row_user->roles);
+                    $row_user_roles = $this->user_roles_label($row_user);
                     $user_filter_url = add_query_arg(['page' => 'wp-flame', 'user_id' => $row_user_id], admin_url('tools.php'));
-                    $user_cell = '<a href="' . esc_url($user_filter_url) . '">' . esc_html($row_user->display_name) . '</a> <span style="color:#999">(' . esc_html($row_user_roles) . ')</span>';
+                    $user_cell = '<a href="' . esc_url($user_filter_url) . '">' . esc_html($this->user_display_name($row_user, $row_user_id)) . '</a>';
+                    if ($row_user_roles !== '') {
+                        $user_cell .= ' <span style="color:#999">(' . esc_html($row_user_roles) . ')</span>';
+                    }
                 } else {
                     $user_filter_url = add_query_arg(['page' => 'wp-flame', 'user_id' => $row_user_id], admin_url('tools.php'));
                     $user_cell = '<a href="' . esc_url($user_filter_url) . '">#' . esc_html((string) $row_user_id) . '</a>';
@@ -285,7 +261,7 @@ class ListView
             }
 
             // Resolve IP display info
-            $row_ip = (string) ($row['ip_address'] ?? '');
+            $row_ip = $row['ip_address'];
             if ($row_ip !== '') {
                 $ip_filter_url = add_query_arg(['page' => 'wp-flame', 'ip_address' => $row_ip], admin_url('tools.php'));
                 $ip_cell = '<a href="' . esc_url($ip_filter_url) . '">' . esc_html($row_ip) . '</a>';
@@ -299,13 +275,13 @@ class ListView
             echo '<td>' . wp_kses_post($user_cell) . '</td>';
             echo '<td>' . wp_kses_post($ip_cell) . '</td>';
             if ($row['score'] !== null) {
-                $badge_grade = Score::grade((int) $row['score']);
+                $badge_grade = Score::grade($row['score']);
                 echo '<td><span class="wp-flame-score-badge" style="background:' . esc_attr($badge_grade['color']) . '">' . esc_html((string) $row['score']) . '</span></td>';
             } else {
                 echo '<td>&mdash;</td>';
             }
-            echo '<td>' . esc_html(round((float) $row['total_ms'], 1)) . ' ms</td>';
-            echo '<td>' . esc_html($row['query_count']) . '</td>';
+            echo '<td>' . esc_html(round($row['total_ms'], 1)) . ' ms</td>';
+            echo '<td>' . esc_html((string) $row['query_count']) . '</td>';
             echo '<td>' . esc_html($mem_mb) . ' MB</td>';
             echo '<td>' . esc_html($row['created_at']) . '</td>';
             echo '<td>';
@@ -313,7 +289,7 @@ class ListView
             echo '<form method="post" style="display:inline">';
             wp_nonce_field('wp_flame_delete_' . $row['trace_id']);
             echo '<input type="hidden" name="wp_flame_delete_trace" value="' . esc_attr($row['trace_id']) . '">';
-            echo '<button type="submit" class="button-link" onclick="return confirm(\'' . esc_js(__('Delete this trace?', 'wp-flame')) . '\')">' . esc_html__('Delete', 'wp-flame') . '</button>';
+            echo '<button type="submit" class="button-link wp-flame-confirm-submit" data-wp-flame-confirm="' . esc_attr__('Delete this trace?', 'wp-flame') . '">' . esc_html__('Delete', 'wp-flame') . '</button>';
             echo '</form>';
             echo '</td></tr>';
         }
@@ -336,11 +312,120 @@ class ListView
         echo '</div>';
     }
 
+    /**
+     * @param array<string, mixed> $request
+     * @return array<string, mixed>
+     */
+    private function filters_from_request(array $request): array
+    {
+        $filters = [];
+
+        $search = $this->request_string($request, 's');
+        if ($search !== '') {
+            $filters['url'] = $search;
+        }
+
+        $min_duration = $this->request_float($request, 'min_duration');
+        if ($min_duration !== null) {
+            $filters['min_duration'] = $min_duration;
+        }
+
+        $max_duration = $this->request_float($request, 'max_duration');
+        if ($max_duration !== null) {
+            $filters['max_duration'] = $max_duration;
+        }
+
+        $method = strtoupper($this->request_string($request, 'method'));
+        if (in_array($method, ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'], true)) {
+            $filters['method'] = $method;
+        }
+
+        $type = $this->request_string($request, 'type');
+        if ($type === 'cron') {
+            $filters['url'] = 'wp-cron.php';
+        } elseif ($type === 'ajax') {
+            $filters['url'] = 'admin-ajax.php';
+        } elseif ($type === 'rest') {
+            $filters['url'] = 'wp-json';
+        } elseif ($type === 'graphql') {
+            $filters['url'] = '/graphql';
+        }
+
+        $user_id = $this->request_string($request, 'user_id');
+        if ($user_id !== '' && is_numeric($user_id)) {
+            $filters['user_id'] = max(0, (int) $user_id);
+        }
+
+        $ip_address = $this->request_string($request, 'ip_address');
+        if ($ip_address !== '') {
+            $filters['ip_address'] = $this->limit_string($ip_address, self::MAX_IP_BYTES);
+        }
+
+        $grade = strtoupper($this->request_string($request, 'grade'));
+        $grade_ranges = [
+            'A' => [90, 100],
+            'B' => [80, 89],
+            'C' => [70, 79],
+            'D' => [60, 69],
+            'F' => [0, 59],
+        ];
+        if (isset($grade_ranges[$grade])) {
+            $filters['min_score'] = $grade_ranges[$grade][0];
+            $filters['max_score'] = $grade_ranges[$grade][1];
+        }
+
+        $orderby = $this->request_string($request, 'orderby');
+        if ($orderby !== '') {
+            $filters['orderby'] = $orderby;
+        }
+
+        $order = strtoupper($this->request_string($request, 'order'));
+        if ($order !== '') {
+            $filters['order'] = $order;
+        }
+
+        $paged = $this->request_string($request, 'paged');
+        $filters['page'] = $paged !== '' && is_numeric($paged) ? max(1, (int) $paged) : 1;
+        $filters['per_page'] = 20;
+
+        return $filters;
+    }
+
+    /**
+     * @param array<string, mixed> $request
+     */
+    private function request_float(array $request, string $key): ?float
+    {
+        $value = $this->request_string($request, $key);
+        if ($value === '' || ! is_numeric($value)) {
+            return null;
+        }
+
+        $float = (float) $value;
+
+        return is_finite($float) ? max(0.0, $float) : null;
+    }
+
+    /**
+     * @param array<string, mixed> $request
+     */
+    private function request_string(array $request, string $key): string
+    {
+        if (! array_key_exists($key, $request)) {
+            return '';
+        }
+
+        return $this->limit_string(
+            sanitize_text_field(Config::string_value(wp_unslash($request[$key]), '')),
+            self::MAX_REQUEST_STRING_BYTES
+        );
+    }
+
     private function render_dashboard(array $filters): void
     {
-        $stats        = $this->storage->get_aggregate_stats(7);
+        $stats        = $this->aggregate_stats($this->storage->get_aggregate_stats(7));
         $slowest_pages = $this->storage->get_slowest_pages(5, 7);
-        $avg_score    = $this->storage->get_avg_score(7);
+        $avg_score    = $this->average_score($this->storage->get_avg_score(7));
 
         // Trend indicator
         $trend       = '—';
@@ -360,8 +445,17 @@ class ListView
         }
 
         // Slowest page for card display
-        $slowest_page_url = ! empty($slowest_pages) ? $slowest_pages[0]['page_url'] : '—';
-        $slowest_page_ms  = ! empty($slowest_pages) ? round((float) $slowest_pages[0]['avg_ms'], 1) : 0;
+        $slowest_page_url = '—';
+        $slowest_page_ms  = 0.0;
+        foreach ($slowest_pages as $page) {
+            if (! is_array($page)) {
+                continue;
+            }
+
+            $slowest_page_url = $this->row_string($page, 'page_url', '—', self::MAX_URL_BYTES) ?: '—';
+            $slowest_page_ms  = round(max(0.0, $this->row_number($page, 'avg_ms', 0.0)), 1);
+            break;
+        }
 
         // Summary stat cards
         echo '<div class="wp-flame-summary">';
@@ -401,19 +495,24 @@ class ListView
             $avg_grade = Score::grade((int) round($avg_score));
             echo '<div class="wp-flame-stat wp-flame-score-card" style="border-left:4px solid ' . esc_attr($avg_grade['color']) . '">';
             echo '<span class="wp-flame-stat-label">' . esc_html__('AVG SCORE', 'wp-flame') . '</span>';
-            echo '<span class="wp-flame-stat-value" style="color:' . esc_attr($avg_grade['color']) . '">' . esc_html((string) $avg_score) . '<small>' . esc_html($avg_grade['grade']) . '</small></span>';
+            echo '<span class="wp-flame-stat-value" style="color:' . esc_attr($avg_grade['color']) . '">' . esc_html((string) round($avg_score, 1)) . '<small>' . esc_html($avg_grade['grade']) . '</small></span>';
             echo '<span class="wp-flame-trend">' . esc_html__('last 7 days', 'wp-flame') . '</span>';
             echo '</div>';
         }
 
         echo '</div>'; // .wp-flame-summary
 
-        // Fetch and decode trace data once; reuse for breakdown bar and slowest callbacks.
-        $trace_data_blobs   = $this->storage->get_recent_trace_data(50);
+        // Fetch and decode a bounded set of trace data once; reuse for breakdown bar and slowest callbacks.
+        $trace_data_blobs   = $this->storage->get_recent_trace_data();
         $decoded_traces     = [];
         foreach ($trace_data_blobs as $blob) {
+            $blob = Config::string_value($blob, '');
+            if ($blob === '') {
+                continue;
+            }
+
             $data = json_decode($blob, true);
-            if (is_array($data) && ! empty($data['spans'])) {
+            if (is_array($data) && ! empty($data['spans']) && is_array($data['spans'])) {
                 $decoded_traces[] = $data;
             }
         }
@@ -423,9 +522,13 @@ class ListView
 
         foreach ($decoded_traces as $data) {
             foreach ($data['spans'] as $span) {
-                $type = $span['type'] ?? '';
+                if (! is_array($span)) {
+                    continue;
+                }
+
+                $type = Config::string_value($span['type'] ?? '', '');
                 if (array_key_exists($type, $type_totals)) {
-                    $type_totals[$type] += (float) ($span['duration_ms'] ?? 0);
+                    $type_totals[$type] += max(0.0, $this->number($span['self_ms'] ?? $span['duration_ms'] ?? 0, 0.0));
                 }
             }
         }
@@ -482,10 +585,18 @@ class ListView
             echo '<tr><td colspan="2">' . esc_html__('No data yet.', 'wp-flame') . '</td></tr>';
         } else {
             foreach ($slowest_pages as $page) {
+                if (! is_array($page)) {
+                    continue;
+                }
+
+                $page_url = $this->row_string($page, 'page_url', '', self::MAX_URL_BYTES);
+                $avg_ms   = max(0.0, $this->row_number($page, 'avg_ms', 0.0));
+                $hits     = $this->row_int($page, 'hits', 0, 0, PHP_INT_MAX);
+
                 echo '<tr>';
-                echo '<td>' . esc_html($page['page_url']) . '</td>';
-                echo '<td>' . esc_html(round((float) $page['avg_ms'], 1)) . ' ms';
-                echo ' <span style="color:#c3c4c7">(' . esc_html((string) $page['hits']) . 'x)</span>';
+                echo '<td>' . esc_html($page_url) . '</td>';
+                echo '<td>' . esc_html(round($avg_ms, 1)) . ' ms';
+                echo ' <span style="color:#c3c4c7">(' . esc_html((string) $hits) . 'x)</span>';
                 echo '</td>';
                 echo '</tr>';
             }
@@ -511,14 +622,16 @@ class ListView
         echo '</div>'; // .wp-flame-ranking
 
         // Chart 3: Response Time Distribution Histogram
-        $distribution = $this->storage->get_response_time_distribution(7);
-        $max_count    = max(array_column($distribution, 'count')) ?: 1;
+        $distribution = $this->normalize_distribution($this->storage->get_response_time_distribution(7));
+        $max_count    = max(array_map(static function (array $bucket): int {
+            return $bucket['count'];
+        }, $distribution) ?: [1]);
 
         echo '<div class="wp-flame-ranking">';
         echo '<h3>' . esc_html__('Response Time Distribution', 'wp-flame') . '</h3>';
         echo '<div class="wp-flame-histogram">';
         foreach ($distribution as $bucket) {
-            $pct = ($bucket['count'] / $max_count) * 100;
+            $pct = $max_count > 0 ? ($bucket['count'] / $max_count) * 100 : 0;
             $filter_url = add_query_arg([
                 'page'         => 'wp-flame',
                 'min_duration' => $bucket['min'],
@@ -562,24 +675,32 @@ class ListView
             echo '<tr><td colspan="4">' . esc_html__('No data yet.', 'wp-flame') . '</td></tr>';
         } else {
             foreach ($top_users as $user_row) {
-                $tu_id   = (int) $user_row['user_id'];
+                if (! is_array($user_row)) {
+                    continue;
+                }
+
+                $tu_id   = $this->row_int($user_row, 'user_id', 0, 0, PHP_INT_MAX);
                 $tu_url  = add_query_arg(['page' => 'wp-flame', 'user_id' => $tu_id], admin_url('tools.php'));
                 if ($tu_id > 0 && function_exists('get_userdata')) {
                     $tu_user = get_userdata($tu_id);
-                    $tu_name = $tu_user ? $tu_user->display_name : '#' . $tu_id;
+                    $tu_name = $tu_user ? $this->user_display_name($tu_user, $tu_id) : '#' . $tu_id;
                     if ($tu_user) {
-                        $tu_roles = implode(', ', $tu_user->roles);
-                        $tu_name  = $tu_user->display_name . ' (' . $tu_roles . ')';
+                        $tu_roles = $this->user_roles_label($tu_user);
+                        if ($tu_roles !== '') {
+                            $tu_name .= ' (' . $tu_roles . ')';
+                        }
                     }
                 } else {
                     $tu_name = __('Anonymous', 'wp-flame');
                     $tu_url  = add_query_arg(['page' => 'wp-flame', 'user_id' => 0], admin_url('tools.php'));
                 }
-                $tu_total_s = round((float) $user_row['total_ms'] / 1000, 1);
-                echo '<tr style="cursor:pointer" onclick="window.location=\'' . esc_url($tu_url) . '\'">';
+                $tu_total_s = round(max(0.0, $this->row_number($user_row, 'total_ms', 0.0)) / 1000, 1);
+                $tu_avg_ms  = round(max(0.0, $this->row_number($user_row, 'avg_ms', 0.0)));
+                $tu_requests = $this->row_int($user_row, 'request_count', 0, 0, PHP_INT_MAX);
+                echo '<tr>';
                 echo '<td><a href="' . esc_url($tu_url) . '" style="text-decoration:none;color:inherit">' . esc_html($tu_name) . '</a></td>';
-                echo '<td style="text-align:right">' . esc_html((string) $user_row['request_count']) . '</td>';
-                echo '<td style="text-align:right">' . esc_html(round((float) $user_row['avg_ms'])) . 'ms</td>';
+                echo '<td style="text-align:right">' . esc_html((string) $tu_requests) . '</td>';
+                echo '<td style="text-align:right">' . esc_html((string) $tu_avg_ms) . 'ms</td>';
                 echo '<td style="text-align:right">' . esc_html((string) $tu_total_s) . 's</td>';
                 echo '</tr>';
             }
@@ -601,13 +722,23 @@ class ListView
             echo '<tr><td colspan="4">' . esc_html__('No data yet.', 'wp-flame') . '</td></tr>';
         } else {
             foreach ($top_ips as $ip_row) {
-                $ti_ip  = (string) $ip_row['ip_address'];
+                if (! is_array($ip_row)) {
+                    continue;
+                }
+
+                $ti_ip  = $this->row_string($ip_row, 'ip_address', '', self::MAX_IP_BYTES);
+                if ($ti_ip === '') {
+                    continue;
+                }
+
                 $ti_url = add_query_arg(['page' => 'wp-flame', 'ip_address' => $ti_ip], admin_url('tools.php'));
-                $ti_total_s = round((float) $ip_row['total_ms'] / 1000, 1);
-                echo '<tr style="cursor:pointer" onclick="window.location=\'' . esc_url($ti_url) . '\'">';
+                $ti_total_s = round(max(0.0, $this->row_number($ip_row, 'total_ms', 0.0)) / 1000, 1);
+                $ti_avg_ms  = round(max(0.0, $this->row_number($ip_row, 'avg_ms', 0.0)));
+                $ti_requests = $this->row_int($ip_row, 'request_count', 0, 0, PHP_INT_MAX);
+                echo '<tr>';
                 echo '<td><a href="' . esc_url($ti_url) . '" style="text-decoration:none;color:inherit">' . esc_html($ti_ip) . '</a></td>';
-                echo '<td style="text-align:right">' . esc_html((string) $ip_row['request_count']) . '</td>';
-                echo '<td style="text-align:right">' . esc_html(round((float) $ip_row['avg_ms'])) . 'ms</td>';
+                echo '<td style="text-align:right">' . esc_html((string) $ti_requests) . '</td>';
+                echo '<td style="text-align:right">' . esc_html((string) $ti_avg_ms) . 'ms</td>';
                 echo '<td style="text-align:right">' . esc_html((string) $ti_total_s) . 's</td>';
                 echo '</tr>';
             }
@@ -621,8 +752,8 @@ class ListView
         $recent_trace_rows = $this->storage->list_traces(['per_page' => 200, 'page' => 1]);
 
         // Abuse detection insights
-        $abuse_insights = \WPFlame\Insights::analyze_dashboard($top_users, $top_ips, $recent_trace_rows);
-        $abuse_insights = apply_filters( 'wp_flame_insights', $abuse_insights, null );
+        $abuse_insights = Insights::analyze_dashboard($top_users, $top_ips, $recent_trace_rows);
+        $abuse_insights = Insights::normalize( apply_filters( 'wp_flame_insights', $abuse_insights, null ) );
         if (! empty($abuse_insights)) {
             echo '<div class="wp-flame-insights">';
             echo '<h3>' . esc_html__('Abuse Detection', 'wp-flame') . '</h3>';
@@ -638,6 +769,189 @@ class ListView
     }
 
     /**
+     * @param mixed $stats
+     * @return array{count: int, avg_ms: float, avg_queries: float, prev_avg_ms: float|null}
+     */
+    private function aggregate_stats($stats): array
+    {
+        if (! is_array($stats)) {
+            $stats = [];
+        }
+
+        $prev_avg_ms = $this->row_number($stats, 'prev_avg_ms', 0.0);
+
+        return [
+            'count'       => $this->row_int($stats, 'count', 0, 0, PHP_INT_MAX),
+            'avg_ms'      => max(0.0, $this->row_number($stats, 'avg_ms', 0.0)),
+            'avg_queries' => max(0.0, $this->row_number($stats, 'avg_queries', 0.0)),
+            'prev_avg_ms' => $prev_avg_ms > 0.0 ? $prev_avg_ms : null,
+        ];
+    }
+
+    /**
+     * @param mixed $value
+     */
+    private function average_score($value): ?float
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        $score = $this->number($value, -1.0);
+        if ($score < 0.0) {
+            return null;
+        }
+
+        return min(100.0, max(0.0, $score));
+    }
+
+    /**
+     * @param mixed $row
+     * @return array<string, mixed>|null
+     */
+    private function trace_row($row): ?array
+    {
+        if (! is_array($row)) {
+            return null;
+        }
+
+        return [
+            'trace_id'    => $this->row_string($row, 'trace_id', '', self::MAX_TRACE_ID_BYTES),
+            'url'         => $this->row_string($row, 'url', '', self::MAX_URL_BYTES),
+            'method'      => $this->row_string($row, 'method', '', self::MAX_METHOD_BYTES),
+            'user_id'     => $this->row_int($row, 'user_id', 0, 0, PHP_INT_MAX),
+            'ip_address'  => $this->row_string($row, 'ip_address', '', self::MAX_IP_BYTES),
+            'score'       => $this->score_value($row['score'] ?? null),
+            'total_ms'    => max(0.0, $this->row_number($row, 'total_ms', 0.0)),
+            'query_count' => $this->row_int($row, 'query_count', 0, 0, PHP_INT_MAX),
+            'peak_memory' => $this->row_int($row, 'peak_memory', 0, 0, PHP_INT_MAX),
+            'created_at'  => $this->row_string($row, 'created_at', '', self::MAX_TIMESTAMP_BYTES),
+        ];
+    }
+
+    /**
+     * @param mixed $rows
+     * @return array<int, array{label: string, min: float, max: float, count: int}>
+     */
+    private function normalize_distribution($rows): array
+    {
+        if (! is_array($rows)) {
+            return [];
+        }
+
+        $normalized = [];
+
+        foreach ($rows as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+
+            $min   = max(0.0, $this->row_number($row, 'min', 0.0));
+            $max   = max($min, $this->row_number($row, 'max', 999999.0));
+            $label = $this->row_string($row, 'label');
+
+            if ($label === '') {
+                $label = $max >= 999999.0
+                    ? sprintf('>%sms', (string) round($min))
+                    : sprintf('%s-%sms', (string) round($min), (string) round($max));
+            }
+
+            $normalized[] = [
+                'label' => $label,
+                'min'   => $min,
+                'max'   => $max,
+                'count' => $this->row_int($row, 'count', 0, 0, PHP_INT_MAX),
+            ];
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * @param mixed $user
+     */
+    private function user_display_name($user, int $fallback_id): string
+    {
+        if (! is_object($user)) {
+            return '#' . $fallback_id;
+        }
+
+        $name = $this->limit_string(Config::string_value($user->display_name ?? '', ''), self::MAX_USER_LABEL_BYTES);
+        return $name !== '' ? $name : '#' . $fallback_id;
+    }
+
+    /**
+     * @param mixed $user
+     */
+    private function user_roles_label($user): string
+    {
+        if (! is_object($user) || ! isset($user->roles) || ! is_array($user->roles)) {
+            return '';
+        }
+
+        $roles = [];
+        foreach ($user->roles as $role) {
+            $role = $this->limit_string(Config::string_value($role, ''), self::MAX_ROLE_LABEL_BYTES);
+            if ($role !== '') {
+                $roles[] = $role;
+            }
+        }
+
+        return $this->limit_string(implode(', ', $roles), self::MAX_ROLE_LABEL_BYTES);
+    }
+
+    /**
+     * @param array<string, mixed> $row
+     */
+    private function row_string(array $row, string $key, string $fallback = '', int $max_bytes = self::MAX_REQUEST_STRING_BYTES): string
+    {
+        return $this->limit_string(Config::string_value($row[$key] ?? $fallback, $fallback), $max_bytes);
+    }
+
+    /**
+     * @param array<string, mixed> $row
+     */
+    private function row_int(array $row, string $key, int $fallback = 0, int $min = 0, int $max = PHP_INT_MAX): int
+    {
+        return Config::bounded_int($row[$key] ?? $fallback, $fallback, $min, $max);
+    }
+
+    /**
+     * @param array<string, mixed> $row
+     */
+    private function row_number(array $row, string $key, float $fallback = 0.0): float
+    {
+        return $this->number($row[$key] ?? $fallback, $fallback);
+    }
+
+    /**
+     * @param mixed $value
+     */
+    private function score_value($value): ?int
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        if (is_int($value)) {
+            $score = $value;
+        } elseif (is_float($value) && is_finite($value)) {
+            $score = (int) $value;
+        } elseif (is_string($value) && is_numeric(trim($value))) {
+            $number = (float) trim($value);
+            if (! is_finite($number)) {
+                return null;
+            }
+
+            $score = (int) $number;
+        } else {
+            return null;
+        }
+
+        return min(100, max(0, $score));
+    }
+
+    /**
      * Build a top-N callback ranking by summing duration_ms across pre-decoded traces.
      *
      * @param array<int, array<string, mixed>> $decoded_traces Already-decoded trace data arrays.
@@ -648,23 +962,64 @@ class ListView
         $totals = [];
 
         foreach ($decoded_traces as $data) {
+            if (empty($data['spans']) || ! is_array($data['spans'])) {
+                continue;
+            }
+
             foreach ($data['spans'] as $span) {
-                // Only callback spans (those with a meta.hook key)
-                if (empty($span['meta']['hook'])) {
+                if (! is_array($span)) {
                     continue;
                 }
 
-                $name = $span['name'] ?? '';
+                $meta = isset($span['meta']) && is_array($span['meta']) ? $span['meta'] : [];
+                $hook = Config::string_value($meta['hook'] ?? '', '');
+
+                // Only callback spans (those with a usable meta.hook key)
+                if ($hook === '') {
+                    continue;
+                }
+
+                $name = $this->limit_string(
+                    Config::string_value($span['name'] ?? '', ''),
+                    self::MAX_CALLBACK_LABEL_BYTES
+                );
                 if ($name === '') {
                     continue;
                 }
 
-                $totals[$name] = ($totals[$name] ?? 0.0) + (float) ($span['duration_ms'] ?? 0);
+                $totals[$name] = ($totals[$name] ?? 0.0) + max(0.0, $this->number($span['duration_ms'] ?? 0, 0.0));
             }
         }
 
         arsort($totals);
 
         return array_slice($totals, 0, $limit, true);
+    }
+
+    private function limit_string(string $value, int $max_bytes): string
+    {
+        if (strlen($value) <= $max_bytes) {
+            return $value;
+        }
+
+        return substr($value, 0, $max_bytes);
+    }
+
+    /**
+     * @param mixed $value
+     */
+    private function number($value, float $fallback): float
+    {
+        if (is_int($value) || is_float($value)) {
+            $number = (float) $value;
+            return is_finite($number) ? $number : $fallback;
+        }
+
+        if (is_string($value) && is_numeric(trim($value))) {
+            $number = (float) trim($value);
+            return is_finite($number) ? $number : $fallback;
+        }
+
+        return $fallback;
     }
 }
