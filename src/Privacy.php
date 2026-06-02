@@ -98,14 +98,16 @@ class Privacy
                 [ 'name' => 'IP Address', 'value' => self::limit_string( self::string_value( $trace['ip_address'] ?? '', '' ), self::MAX_IP_BYTES ) ],
             ];
 
-            $trace_detail = $this->storage->get_trace( $trace_id );
-            if ( $trace_detail instanceof Trace ) {
-                $user_agent = self::limit_string(
-                    self::string_value( $trace_detail->meta['user_agent'] ?? '', '' ),
-                    self::MAX_USER_AGENT_BYTES
-                );
-                if ( $user_agent !== '' ) {
-                    $item_data[] = [ 'name' => 'User Agent', 'value' => $user_agent ];
+            if ( Config::boolean( Config::instance()->get( 'wp_flame_track_user_agent', false ) ) ) {
+                $trace_detail = $this->storage->get_trace( $trace_id );
+                if ( $trace_detail instanceof Trace ) {
+                    $user_agent = self::limit_string(
+                        self::string_value( $trace_detail->meta['user_agent'] ?? '', '' ),
+                        self::MAX_USER_AGENT_BYTES
+                    );
+                    if ( $user_agent !== '' ) {
+                        $item_data[] = [ 'name' => 'User Agent', 'value' => $user_agent ];
+                    }
                 }
             }
 

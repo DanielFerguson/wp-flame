@@ -439,6 +439,10 @@ class Storage
     public function delete_traces_by_user( int $user_id ): int
     {
         $user_id = $this->bounded_int( $user_id, 0, 0, PHP_INT_MAX );
+        if ( $user_id <= 0 ) {
+            return 0;
+        }
+
         $result = $this->wpdb->delete( $this->table, [ 'user_id' => $user_id ], [ '%d' ] );
         return $result !== false ? $this->bounded_int( $result, 0, 0, PHP_INT_MAX ) : 0;
     }

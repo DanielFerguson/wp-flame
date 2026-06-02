@@ -75,6 +75,36 @@ class ReleaseMetadataTest extends TestCase
         }
     }
 
+    public function test_build_script_rejects_untracked_packaged_runtime_files(): void
+    {
+        $script = $this->file('bin/build-zip.sh');
+
+        $this->assertStringContainsString('git ls-files --others --exclude-standard --', $script);
+        $this->assertStringContainsString('wp-flame.php uninstall.php readme.txt README.md CHANGELOG.md composer.json composer.lock', $script);
+        $this->assertStringContainsString('src assets mu-plugin', $script);
+        $this->assertStringContainsString('UNTRACKED_RUNTIME_FILES', $script);
+        $this->assertStringContainsString('Refusing to build with untracked files in packaged runtime paths:', $script);
+    }
+
+    public function test_build_script_allows_dirty_local_build_escape_hatch_for_packaged_untracked_files(): void
+    {
+        $script = $this->file('bin/build-zip.sh');
+
+        $this->assertStringContainsString('"${WP_FLAME_ALLOW_DIRTY_BUILD:-}" != "1" && -n "$UNTRACKED_RUNTIME_FILES"', $script);
+        $this->assertStringContainsString('WP_FLAME_ALLOW_DIRTY_BUILD=1 for a local test build', $script);
+    }
+
+    public function test_build_script_validates_final_zip_manifest(): void
+    {
+        $script = $this->file('bin/build-zip.sh');
+
+        $this->assertStringContainsString('ZIP_MANIFEST=$(unzip -Z1 "$OUTFILE")', $script);
+        $this->assertStringContainsString('(^|/)(tests|node_modules|\\.github|bin)/', $script);
+        $this->assertStringContainsString('(^|/)(\\.DS_Store|\\.gitignore|\\.phpunit\\.result\\.cache|\\.wp-env\\.json|package\\.json|package-lock\\.json|composer\\.json|composer\\.lock)$', $script);
+        $this->assertStringContainsString('Build artifact contains dev-only directories.', $script);
+        $this->assertStringContainsString('Build artifact contains dev-only files.', $script);
+    }
+
     private function file(string $path): string
     {
         $contents = file_get_contents($this->root . '/' . $path);

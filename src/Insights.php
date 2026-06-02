@@ -14,6 +14,9 @@ class Insights
     private const MAX_TITLE_BYTES = 300;
     private const MAX_DETAIL_BYTES = 2000;
     private const MAX_DASHBOARD_ROWS = 200;
+    private const MAX_IP_BYTES = 45;
+    private const MAX_ENDPOINT_BYTES = 2048;
+    private const MAX_USER_LABEL_BYTES = 200;
     private const MAX_PAGINATION_GROUPS = 100;
     private const MAX_PAGINATION_PAGES_PER_GROUP = 50;
     private const MAX_PAGINATION_ENDPOINTS_PER_IP = 5;
@@ -130,7 +133,7 @@ class Insights
                 continue;
             }
 
-            $ip     = self::display_string( $row['ip_address'] ?? '', '' );
+            $ip     = self::limit_string( self::display_string( $row['ip_address'] ?? '', '' ), self::MAX_IP_BYTES );
             $avg_ms = (int) round(self::number( $row['avg_ms'] ?? 0, 0.0 ));
 
             $insights[] = [
@@ -170,10 +173,11 @@ class Insights
 
             if ($user_id > 0 && function_exists('get_userdata')) {
                 $user      = get_userdata($user_id);
-                $user_name = $user ? $user->display_name : '#' . $user_id;
+                $user_name = $user ? self::display_string( $user->display_name ?? '', '#' . $user_id ) : '#' . $user_id;
             } else {
                 $user_name = __('Anonymous', 'wp-flame');
             }
+            $user_name = self::limit_string( $user_name, self::MAX_USER_LABEL_BYTES );
 
             $insights[] = [
                 'severity' => 'warning',
@@ -202,8 +206,8 @@ class Insights
                 continue;
             }
 
-            $ip  = self::display_string( $row['ip_address'] ?? '', '' );
-            $url = self::limit_string( self::display_string( $row['url'] ?? '', '' ), 2048 );
+            $ip  = self::limit_string( self::display_string( $row['ip_address'] ?? '', '' ), self::MAX_IP_BYTES );
+            $url = self::limit_string( self::display_string( $row['url'] ?? '', '' ), self::MAX_ENDPOINT_BYTES );
 
             if ($ip === '') {
                 continue;
@@ -229,7 +233,7 @@ class Insights
             }
 
             $page     = max(1, (int) $params['page']);
-            $endpoint = substr($url, 0, $query_pos);
+            $endpoint = self::limit_string( substr($url, 0, $query_pos), self::MAX_ENDPOINT_BYTES );
             $key      = $ip . '|||' . $endpoint;
 
             if (! isset($groups[$key])) {

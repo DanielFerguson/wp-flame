@@ -16,6 +16,8 @@ class Trace
     private const MAX_TIMESTAMP_BYTES = 64;
     private const MAX_VERSION_BYTES = 64;
     private const MAX_HYDRATED_SPANS = 5000;
+    private const MAX_QUERY_COUNT = 1000000;
+    private const MAX_TOTAL_QUERY_MS = 86400000.0;
     private const MAX_META_ENTRIES = 50;
     private const MAX_META_ARRAY_ENTRIES = 20;
     private const MAX_META_ARRAY_DEPTH = 2;
@@ -174,10 +176,10 @@ class Trace
         );
 
         if ( array_key_exists( 'query_count', $data ) ) {
-            $trace->query_count = max( 0, self::int_value( $data['query_count'], 0 ) );
+            $trace->query_count = min( self::MAX_QUERY_COUNT, max( 0, self::int_value( $data['query_count'], 0 ) ) );
         }
         if ( array_key_exists( 'total_query_ms', $data ) ) {
-            $trace->total_query_ms = max( 0.0, self::float_value( $data['total_query_ms'], 0.0 ) );
+            $trace->total_query_ms = min( self::MAX_TOTAL_QUERY_MS, max( 0.0, self::float_value( $data['total_query_ms'], 0.0 ) ) );
         }
 
         return $trace;
@@ -282,7 +284,11 @@ class Trace
      */
     private static function int_value( $value, int $fallback ): int
     {
-        if ( is_int( $value ) || is_float( $value ) ) {
+        if ( is_int( $value ) ) {
+            return $value;
+        }
+
+        if ( is_float( $value ) ) {
             $number = (float) $value;
             return is_finite( $number ) ? (int) $number : $fallback;
         }

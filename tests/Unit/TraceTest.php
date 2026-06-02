@@ -330,6 +330,18 @@ class TraceTest extends TestCase
         $this->assertSame(0.0, $trace->spans[0]->duration_ms);
     }
 
+    public function test_from_array_bounds_legacy_query_aggregates(): void
+    {
+        $trace = Trace::fromArray([
+            'query_count'    => PHP_INT_MAX,
+            'total_query_ms' => '999999999999',
+            'spans'          => [],
+        ]);
+
+        $this->assertSame(1000000, $trace->query_count);
+        $this->assertSame(86400000.0, $trace->total_query_ms);
+    }
+
     public function test_from_array_preserves_stored_query_aggregates(): void
     {
         $trace = Trace::fromArray([

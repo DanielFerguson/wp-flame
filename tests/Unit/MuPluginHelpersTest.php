@@ -3,6 +3,10 @@
 declare(strict_types=1);
 
 namespace {
+    if (! defined('WP_PLUGIN_DIR')) {
+        define('WP_PLUGIN_DIR', '/var/www/html/wp-content/plugins');
+    }
+
     if (! function_exists('is_multisite')) {
         function is_multisite(): bool
         {
@@ -84,6 +88,26 @@ namespace WPFlame\Tests\Unit {
                 ['other-plugin/plugin.php' => 1780000000],
                 'custom-wp-flame/wp-flame.php'
             ));
+        }
+
+        public function test_mu_plugin_dir_from_file_supports_renamed_plugin_folders(): void
+        {
+            $this->loadMuPlugin();
+
+            $this->assertSame(
+                '/var/www/html/wp-content/plugins/custom-wp-flame',
+                \wp_flame_mu_plugin_dir_from_file('custom-wp-flame/wp-flame.php')
+            );
+        }
+
+        public function test_mu_plugin_dir_from_file_rejects_absolute_or_traversal_paths(): void
+        {
+            $this->loadMuPlugin();
+
+            $this->assertSame('', \wp_flame_mu_plugin_dir_from_file('/tmp/wp-flame/wp-flame.php'));
+            $this->assertSame('', \wp_flame_mu_plugin_dir_from_file('../wp-flame/wp-flame.php'));
+            $this->assertSame('', \wp_flame_mu_plugin_dir_from_file('wp-flame/../wp-flame.php'));
+            $this->assertSame('', \wp_flame_mu_plugin_dir_from_file('C:\\tmp\\wp-flame\\wp-flame.php'));
         }
     }
 }

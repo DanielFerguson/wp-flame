@@ -78,6 +78,7 @@ namespace {
         public $query_result = 0;
         /** @var mixed */
         public $delete_result = 0;
+        public int $delete_calls = 0;
 
         public function get_row($query, $output = null)
         {
@@ -99,6 +100,7 @@ namespace {
 
         public function delete($table, $where, $where_format = null)
         {
+            $this->delete_calls++;
             return $this->delete_result;
         }
     }
@@ -247,6 +249,15 @@ namespace WPFlame\Tests\Unit {
 
             $wpdb->delete_result = ['bad'];
             $this->assertSame(0, $storage->delete_traces_by_user(123));
+        }
+
+        public function test_delete_traces_by_user_refuses_anonymous_user_id(): void
+        {
+            $wpdb = new \WPFlame_TimeBreakdown_WPDB();
+            $storage = new Storage($wpdb);
+
+            $this->assertSame(0, $storage->delete_traces_by_user(0));
+            $this->assertSame(0, $wpdb->delete_calls);
         }
 
         public function test_prune_old_clamps_days_to_one(): void

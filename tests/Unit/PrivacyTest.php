@@ -14,6 +14,7 @@ class PrivacyTest extends TestCase
     protected function tearDown(): void
     {
         unset($GLOBALS['wp_flame_test_users_by_email']);
+        unset($GLOBALS['wp_flame_test_options']);
         parent::tearDown();
     }
 
@@ -72,11 +73,8 @@ class PrivacyTest extends TestCase
                     'created_at' => '2026-06-01 00:00:00',
                     'ip_address' => null,
                 ],
-            ]);
-        $storage->expects($this->once())
-            ->method('get_trace')
-            ->with('trace-1')
-            ->willReturn(null);
+        ]);
+        $storage->expects($this->never())->method('get_trace');
 
         $warnings = [];
         set_error_handler(static function (int $errno, string $errstr) use (&$warnings): bool {
@@ -105,6 +103,9 @@ class PrivacyTest extends TestCase
     {
         $GLOBALS['wp_flame_test_users_by_email'] = [
             'person@example.com' => ['ID' => 123],
+        ];
+        $GLOBALS['wp_flame_test_options'] = [
+            'wp_flame_track_user_agent' => 1,
         ];
 
         $storage = $this->getMockBuilder(Storage::class)
@@ -151,6 +152,9 @@ class PrivacyTest extends TestCase
         $GLOBALS['wp_flame_test_users_by_email'] = [
             'person@example.com' => ['ID' => 123],
         ];
+        $GLOBALS['wp_flame_test_options'] = [
+            'wp_flame_track_user_agent' => 1,
+        ];
 
         $long_trace_id = str_repeat('t', 300);
         $storage = $this->getMockBuilder(Storage::class)
@@ -195,6 +199,41 @@ class PrivacyTest extends TestCase
         $this->assertSame(64, strlen($data[3]['value']));
         $this->assertSame(45, strlen($data[4]['value']));
         $this->assertSame(500, strlen($data[5]['value']));
+    }
+
+    public function test_export_user_data_does_not_load_trace_details_when_user_agent_tracking_is_disabled(): void
+    {
+        $GLOBALS['wp_flame_test_users_by_email'] = [
+            'person@example.com' => ['ID' => 123],
+        ];
+        $GLOBALS['wp_flame_test_options'] = [
+            'wp_flame_track_user_agent' => 0,
+        ];
+
+        $storage = $this->getMockBuilder(Storage::class)
+            ->disableOriginalConstructor()
+            ->onlyMethods(['list_traces', 'get_trace'])
+            ->getMock();
+
+        $storage->method('list_traces')
+            ->willReturn([
+                [
+                    'trace_id'   => 'trace-1',
+                    'url'        => '/account',
+                    'method'     => 'GET',
+                    'total_ms'   => 25,
+                    'created_at' => '2026-06-01 00:00:00',
+                    'ip_address' => '203.0.113.10',
+                ],
+            ]);
+        $storage->expects($this->never())->method('get_trace');
+
+        $result = (new Privacy($storage))->export_user_data('person@example.com');
+
+        $this->assertNotContains(
+            ['name' => 'User Agent', 'value' => 'Mozilla/5.0 Test'],
+            $result['data'][0]['data']
+        );
     }
 
     public function test_export_user_data_ignores_malformed_user_id_without_querying_storage(): void

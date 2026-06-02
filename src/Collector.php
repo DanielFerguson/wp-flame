@@ -10,6 +10,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class Collector
 {
+    private const MAX_SOURCE_CACHE_ENTRIES = 1000;
+
     private static ?self $instance = null;
 
     private float $request_start = 0.0;
@@ -231,6 +233,11 @@ class Collector
     {
         while (! empty($this->span_stack)) {
             $entry = array_pop($this->span_stack);
+            if ( $this->completed_span_limit_reached() ) {
+                $this->dropped_span_count++;
+                continue;
+            }
+
             $duration_ms = ((microtime(true) - $this->request_start) * 1000) - $entry['start_ms'];
             $meta = $entry['meta'];
             $meta['auto_closed'] = true;
@@ -335,6 +342,11 @@ class Collector
         return $this->max_spans > 0 && (count($this->spans) + count($this->span_stack)) >= $this->max_spans;
     }
 
+    private function completed_span_limit_reached(): bool
+    {
+        return $this->max_spans > 0 && count($this->spans) >= $this->max_spans;
+    }
+
     /**
      * Resolve a file path to a source attribution array.
      *
@@ -373,7 +385,10 @@ class Collector
             $result = ['type' => Span::TYPE_CORE, 'source' => 'wordpress'];
         }
 
-        self::$source_cache[$file_path] = $result;
+        if ( count( self::$source_cache ) < self::MAX_SOURCE_CACHE_ENTRIES ) {
+            self::$source_cache[$file_path] = $result;
+        }
+
         return $result;
     }
 

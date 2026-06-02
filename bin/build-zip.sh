@@ -32,6 +32,18 @@ if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         echo "Refusing to build from a dirty tracked worktree. Commit or stash changes first, or set WP_FLAME_ALLOW_DIRTY_BUILD=1 for a local test build." >&2
         exit 1
     fi
+
+    UNTRACKED_RUNTIME_FILES=$(
+        git ls-files --others --exclude-standard -- \
+            wp-flame.php uninstall.php readme.txt README.md CHANGELOG.md composer.json composer.lock \
+            src assets mu-plugin
+    )
+    if [[ "${WP_FLAME_ALLOW_DIRTY_BUILD:-}" != "1" && -n "$UNTRACKED_RUNTIME_FILES" ]]; then
+        echo "Refusing to build with untracked files in packaged runtime paths:" >&2
+        echo "$UNTRACKED_RUNTIME_FILES" >&2
+        echo "Commit, remove, or move these files first, or set WP_FLAME_ALLOW_DIRTY_BUILD=1 for a local test build." >&2
+        exit 1
+    fi
 fi
 
 PLUGIN_VERSION=$(grep -m1 '^ \* Version:' wp-flame.php | sed 's/.*Version:[[:space:]]*//')
@@ -109,5 +121,15 @@ done
 # Create zip
 rm -f "$OUTFILE"
 (cd "$BUILD_DIR" && zip -rq "$REPO_DIR/$OUTFILE" wp-flame/)
+
+ZIP_MANIFEST=$(unzip -Z1 "$OUTFILE")
+if echo "$ZIP_MANIFEST" | grep -Eq '(^|/)(tests|node_modules|\.github|bin)/'; then
+    echo "Build artifact contains dev-only directories." >&2
+    exit 1
+fi
+if echo "$ZIP_MANIFEST" | grep -Eq '(^|/)(\.DS_Store|\.gitignore|\.phpunit\.result\.cache|\.wp-env\.json|package\.json|package-lock\.json|composer\.json|composer\.lock)$'; then
+    echo "Build artifact contains dev-only files." >&2
+    exit 1
+fi
 
 echo "Done: $OUTFILE ($(du -h "$OUTFILE" | cut -f1))"

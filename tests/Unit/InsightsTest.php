@@ -721,6 +721,19 @@ class InsightsTest extends TestCase
         $this->assertEmpty($matches);
     }
 
+    public function test_dashboard_high_request_rate_bounds_ip_labels_before_rendering(): void
+    {
+        $top_ips = [
+            ['ip_address' => str_repeat('1', 200), 'request_count' => 412, 'avg_ms' => 1720.0, 'total_ms' => 708640.0],
+        ];
+
+        $insights = Insights::analyze_dashboard([], $top_ips, []);
+
+        $this->assertCount(1, $insights);
+        $this->assertStringContainsString(str_repeat('1', 45), $insights[0]['title']);
+        $this->assertStringNotContainsString(str_repeat('1', 46), $insights[0]['title']);
+    }
+
     public function test_high_resource_consumer_above_60s_produces_warning(): void
     {
         $top_users = [
@@ -891,6 +904,24 @@ class InsightsTest extends TestCase
         $matches = array_filter($insights, fn($i) => str_contains($i['title'], 'scraping'));
 
         $this->assertEmpty($matches);
+    }
+
+    public function test_dashboard_pagination_analysis_bounds_ip_and_endpoint_labels(): void
+    {
+        $endpoint = '/wp-json/wc/v3/' . str_repeat('customers', 220);
+        $traces = [
+            ['url' => $endpoint . '?page=1', 'ip_address' => str_repeat('2', 200)],
+            ['url' => $endpoint . '?page=2', 'ip_address' => str_repeat('2', 200)],
+            ['url' => $endpoint . '?page=3', 'ip_address' => str_repeat('2', 200)],
+        ];
+
+        $insights = Insights::analyze_dashboard([], [], $traces);
+        $matches = array_values(array_filter($insights, fn($i) => str_contains($i['title'], 'scraping')));
+
+        $this->assertCount(1, $matches);
+        $this->assertStringContainsString(str_repeat('2', 45), $matches[0]['title']);
+        $this->assertStringNotContainsString(str_repeat('2', 46), $matches[0]['title']);
+        $this->assertLessThanOrEqual(2000, strlen($matches[0]['detail']));
     }
 
     // ---------------------------------------------------------------------------

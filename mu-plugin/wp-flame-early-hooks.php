@@ -103,6 +103,22 @@ if ( ! function_exists( 'wp_flame_mu_plugin_option_matches' ) ) {
     }
 }
 
+if ( ! function_exists( 'wp_flame_mu_plugin_dir_from_file' ) ) {
+    function wp_flame_mu_plugin_dir_from_file( string $plugin_file ): string {
+        $plugin_file = str_replace( '\\', '/', trim( $plugin_file ) );
+        if (
+            $plugin_file === ''
+            || $plugin_file[0] === '/'
+            || strpos( $plugin_file, ':' ) !== false
+            || preg_match( '#(^|/)\.\.(/|$)#', $plugin_file )
+        ) {
+            return '';
+        }
+
+        return WP_PLUGIN_DIR . '/' . dirname( $plugin_file );
+    }
+}
+
 if ( ! function_exists( 'wp_flame_mu_has_logged_in_cookie' ) ) {
     function wp_flame_mu_has_logged_in_cookie( array $cookies ): bool {
         if ( ! defined( 'LOGGED_IN_COOKIE' ) || ! is_string( LOGGED_IN_COOKIE ) || LOGGED_IN_COOKIE === '' ) {
@@ -216,9 +232,10 @@ if ( $wp_flame_sample_rate > 1 && ! $wp_flame_force_cookie_present && ! $wp_flam
 
 // Load the main plugin's autoloader. Prefer the stored plugin basename so
 // renamed folders, symlinked checkouts, and commercial builds still load.
-$wp_flame_plugin_dir = $wp_flame_plugin_file !== ''
-    ? WP_PLUGIN_DIR . '/' . dirname( $wp_flame_plugin_file )
-    : WP_PLUGIN_DIR . '/wp-flame';
+$wp_flame_plugin_dir = wp_flame_mu_plugin_dir_from_file( $wp_flame_plugin_file );
+if ( $wp_flame_plugin_dir === '' ) {
+    $wp_flame_plugin_dir = WP_PLUGIN_DIR . '/wp-flame';
+}
 $wp_flame_autoload = $wp_flame_plugin_dir . '/vendor/autoload.php';
 if ( ! file_exists( $wp_flame_autoload ) ) {
     return; // Main plugin missing — graceful no-op

@@ -4,6 +4,7 @@ namespace WPFlame\Tests\Unit;
 
 use PHPUnit\Framework\TestCase;
 use ReflectionMethod;
+use ReflectionProperty;
 use WPFlame\Collector;
 use WPFlame\Span;
 
@@ -272,6 +273,26 @@ class CollectorTest extends TestCase
         $this->assertTrue($trace->spans[1]->meta['auto_closed']);
     }
 
+    public function test_close_open_spans_respects_completed_span_limit(): void
+    {
+        $collector = Collector::instance();
+        $collector->start_request(1000.0);
+
+        $collector->start_span('Outer', Span::TYPE_CORE, 'test');
+        $collector->start_span('Middle', Span::TYPE_PLUGIN, 'test');
+        $collector->start_span('Inner', Span::TYPE_DB, 'test');
+
+        $collector->set_limits(2);
+        $collector->close_open_spans();
+
+        $trace = $collector->get_trace();
+
+        $this->assertCount(2, $trace->spans);
+        $this->assertSame('Inner', $trace->spans[0]->name);
+        $this->assertSame('Middle', $trace->spans[1]->name);
+        $this->assertSame(1, $trace->meta['wp_flame_dropped_spans']);
+    }
+
     public function test_get_source_from_plugin_file(): void
     {
         if (! defined('WP_PLUGIN_DIR')) {
@@ -328,6 +349,27 @@ class CollectorTest extends TestCase
 
         $this->assertSame($first, $second);
         $this->assertSame(Span::TYPE_PHP, $first['type']);
+    }
+
+    public function test_get_source_cache_is_bounded(): void
+    {
+        $property = new ReflectionProperty(Collector::class, 'source_cache');
+        $property->setAccessible(true);
+
+        $full_cache = [];
+        for ($i = 0; $i < 1000; $i++) {
+            $full_cache['/generated/path-' . $i . '.php'] = [
+                'type'   => Span::TYPE_PHP,
+                'source' => 'path-' . $i . '.php',
+            ];
+        }
+        $property->setValue(null, $full_cache);
+
+        Collector::instance()->get_source_from_file('/generated/path-overflow.php');
+
+        $cache = $property->getValue();
+        $this->assertCount(1000, $cache);
+        $this->assertArrayNotHasKey('/generated/path-overflow.php', $cache);
     }
 
     public function test_end_span_filtered_keeps_span_above_threshold(): void

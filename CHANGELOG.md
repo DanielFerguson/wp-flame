@@ -36,13 +36,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - CI now runs PHP syntax linting, admin JavaScript syntax checks, and a zip integrity check
 - WordPress integration test installer now runs with stricter shell error handling and quoted paths for CI portability
 - Release zip builder now rejects malformed version arguments before creating artifact names
+- Release zip builder now rejects untracked files inside packaged runtime paths for clean release builds
+- Release zip builder now validates the final zip manifest for dev-only files and directories
 - Compatibility smoke tests now run against the latest production WordPress release while the integration matrix retains WordPress 6.0 lower-bound coverage
 - Full SQL and GraphQL text opt-ins now still bound captured query payload sizes before trace storage
 - Score factor extension output now bounds display labels, values, keys, and weights before rendering
+- The early mu-plugin now rejects unsafe stored plugin basenames before building the main plugin autoload path
 - Flame graph rendering now handles malformed span IDs, cyclic parent references, and oversized span lists defensively
 - Privacy export payloads now bound trace IDs, URLs, methods, dates, IP addresses, durations, and legacy user-agent strings
+- Privacy exports now avoid per-trace detail reads for user-agent metadata unless user-agent tracking is enabled
+- User-trace deletion now refuses anonymous `user_id=0` at the storage boundary
 - WP-CLI trace commands now bound displayed row fields and handle missing or oversized trace IDs defensively
 - Stored trace payloads now normalize top-level fields and trace metadata before JSON encoding so extension metadata cannot bloat persistence
+- Dashboard abuse insights now bound IP, endpoint, and user labels before grouping or rendering recommendations
+- Shutdown auto-closing now respects the configured completed-span cap and reports dropped overflow spans
+- Source attribution caching is now capped per request to bound memory on large plugin stacks
+- Legacy trace hydration now bounds stored query count and total query time aggregates
 - Stored numeric columns and span rows now clamp pathological timing, memory, source, and metadata values before persistence
 - Live trace and span construction now applies the same field, metadata, and span-count bounds as legacy trace hydration
 - Force-trace cookie cleanup now uses matched hardened cookie attributes, including `HttpOnly` and `SameSite=Strict`
