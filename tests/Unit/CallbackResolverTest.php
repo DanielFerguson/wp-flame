@@ -3,6 +3,7 @@
 namespace WPFlame\Tests\Unit;
 
 use PHPUnit\Framework\TestCase;
+use ReflectionMethod;
 use WPFlame\CallbackResolver;
 use WPFlame\Collector;
 use WPFlame\Span;
@@ -111,6 +112,23 @@ class CallbackResolverTest extends TestCase
 
         $this->assertSame(Span::TYPE_PHP, $source['type']);
         $this->assertSame('unknown', $source['source']);
+    }
+
+    public function test_directory_constant_helper_returns_empty_string_for_missing_constants(): void
+    {
+        $method = new ReflectionMethod(CallbackResolver::class, 'directory_constant');
+        $method->setAccessible(true);
+
+        $this->assertSame('', $method->invoke(null, 'WP_FLAME_MISSING_CALLBACK_DIRECTORY'));
+    }
+
+    public function test_path_check_requires_directory_boundary(): void
+    {
+        $method = new ReflectionMethod(CallbackResolver::class, 'path_is_inside_directory');
+        $method->setAccessible(true);
+
+        $this->assertTrue($method->invoke(null, '/var/www/html/wp-content/plugins/foo/plugin.php', '/var/www/html/wp-content/plugins'));
+        $this->assertFalse($method->invoke(null, '/var/www/html/wp-content/plugins-extra/foo.php', '/var/www/html/wp-content/plugins'));
     }
 
     public function test_reset_clears_caches(): void

@@ -10,6 +10,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class Settings
 {
+    private const MAX_REQUEST_STRING_BYTES = 2048;
+
     private Storage $storage;
 
     public function __construct(Storage $storage)
@@ -541,7 +543,19 @@ class Settings
             return '';
         }
 
-        return sanitize_text_field(Config::string_value(wp_unslash($source[$key]), ''));
+        return $this->limit_string(
+            sanitize_text_field(Config::string_value(wp_unslash($source[$key]), '')),
+            self::MAX_REQUEST_STRING_BYTES
+        );
+    }
+
+    private function limit_string(string $value, int $max_bytes): string
+    {
+        if (strlen($value) <= $max_bytes) {
+            return $value;
+        }
+
+        return substr($value, 0, $max_bytes);
     }
 
     public function render_page(): void

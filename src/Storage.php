@@ -279,6 +279,10 @@ class Storage
             return null;
         }
 
+        if ( strlen( $trace_data ) > Config::MAX_MAX_TRACE_BYTES ) {
+            return null;
+        }
+
         $data = json_decode( $trace_data, true );
         if ( ! is_array( $data ) ) {
             error_log( 'WP Flame: Failed to decode trace ' . $trace_id . ': ' . json_last_error_msg() );

@@ -25,6 +25,7 @@ class Span
     private const MAX_META_ARRAY_DEPTH = 2;
     private const MAX_META_KEY_BYTES = 80;
     private const MAX_META_STRING_BYTES = 500;
+    private const MAX_GRAPHQL_QUERY_BYTES = 65536;
 
     public string $id;
     public ?string $parent_id;
@@ -45,14 +46,17 @@ class Span
         float $duration_ms,
         array $meta = []
     ) {
-        $this->id          = $id;
-        $this->parent_id   = $parent_id;
-        $this->name        = $name;
-        $this->type        = $type;
-        $this->source      = $source;
+        $this->id          = self::limit_string( $id, self::MAX_ID_BYTES );
+        $this->parent_id   = $parent_id !== null ? self::limit_string( $parent_id, self::MAX_ID_BYTES ) : null;
+        if ( $this->parent_id === '' ) {
+            $this->parent_id = null;
+        }
+        $this->name        = self::limit_string( $name, self::MAX_NAME_BYTES );
+        $this->type        = self::limit_string( $type, self::MAX_TYPE_BYTES );
+        $this->source      = self::limit_string( $source, self::MAX_SOURCE_BYTES );
         $this->start_ms    = is_finite($start_ms) ? max(0.0, $start_ms) : 0.0;
         $this->duration_ms = is_finite($duration_ms) ? max(0.0, $duration_ms) : 0.0;
-        $this->meta        = $meta;
+        $this->meta        = self::normalize_meta( $meta );
     }
 
     public function toArray(): array
@@ -148,7 +152,7 @@ class Span
                 $key = 'meta_' . ( $count + 1 );
             }
 
-            $value = self::normalize_meta_value( $value, $depth );
+            $value = self::normalize_meta_value( $value, $depth, $key );
             if ( $value === null ) {
                 continue;
             }
@@ -164,7 +168,7 @@ class Span
      * @param mixed $value
      * @return mixed|null
      */
-    private static function normalize_meta_value( $value, int $depth )
+    private static function normalize_meta_value( $value, int $depth, string $key = '' )
     {
         if ( is_bool( $value ) || is_int( $value ) ) {
             return $value;
@@ -175,7 +179,7 @@ class Span
         }
 
         if ( is_string( $value ) || ( is_object( $value ) && method_exists( $value, '__toString' ) ) ) {
-            return self::limit_string( self::string_value( $value, '' ), self::MAX_META_STRING_BYTES );
+            return self::limit_string( self::string_value( $value, '' ), self::max_meta_string_bytes( $key, $depth ) );
         }
 
         if ( is_array( $value ) && $depth < self::MAX_META_ARRAY_DEPTH ) {
@@ -183,6 +187,19 @@ class Span
         }
 
         return null;
+    }
+
+    private static function max_meta_string_bytes( string $key, int $depth ): int
+    {
+        if ( $depth === 0 && $key === 'query' ) {
+            return Redactor::MAX_SQL_LABEL_BYTES;
+        }
+
+        if ( $depth === 0 && $key === 'graphql_query' ) {
+            return self::MAX_GRAPHQL_QUERY_BYTES;
+        }
+
+        return self::MAX_META_STRING_BYTES;
     }
 
     /**

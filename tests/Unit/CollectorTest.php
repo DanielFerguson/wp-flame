@@ -3,6 +3,7 @@
 namespace WPFlame\Tests\Unit;
 
 use PHPUnit\Framework\TestCase;
+use ReflectionMethod;
 use WPFlame\Collector;
 use WPFlame\Span;
 
@@ -294,6 +295,14 @@ class CollectorTest extends TestCase
         $result = $collector->get_source_from_file('/var/www/html/wp-content/plugins-extra/foo.php');
 
         $this->assertNotSame('extra', $result['source']);
+    }
+
+    public function test_directory_constant_helper_returns_empty_string_for_missing_constants(): void
+    {
+        $method = new ReflectionMethod(Collector::class, 'directory_constant');
+        $method->setAccessible(true);
+
+        $this->assertSame('', $method->invoke(null, 'WP_FLAME_MISSING_TEST_DIRECTORY'));
     }
 
     public function test_get_source_from_core_file(): void

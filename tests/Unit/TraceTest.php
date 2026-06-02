@@ -60,6 +60,47 @@ class TraceTest extends TestCase
         $this->assertSame(0, $trace->peak_memory);
     }
 
+    public function test_constructor_bounds_live_trace_strings_meta_and_spans(): void
+    {
+        $spans = ['not-a-span'];
+        for ($i = 0; $i < 5005; $i++) {
+            $spans[] = $this->make_span('s' . $i, Span::TYPE_DB, 0.0, 1.0);
+        }
+
+        $meta = [];
+        for ($i = 0; $i < 60; $i++) {
+            $meta['meta_key_' . $i . str_repeat('k', 100)] = str_repeat('value', 200);
+        }
+
+        $trace = new Trace(
+            str_repeat('t', 300),
+            '/' . str_repeat('checkout/', 400),
+            str_repeat('METHOD', 20),
+            str_repeat('2026-06-01 ', 20),
+            100.0,
+            1024,
+            str_repeat('8.3.', 40),
+            str_repeat('6.7.', 40),
+            $spans,
+            $meta
+        );
+
+        $this->assertSame(128, strlen($trace->id));
+        $this->assertSame(2048, strlen($trace->url));
+        $this->assertSame(20, strlen($trace->method));
+        $this->assertSame(64, strlen($trace->timestamp));
+        $this->assertSame(64, strlen($trace->php_version));
+        $this->assertSame(64, strlen($trace->wp_version));
+        $this->assertCount(5000, $trace->spans);
+        $this->assertSame('s4999', $trace->spans[4999]->id);
+        $this->assertSame(5000, $trace->query_count);
+        $this->assertCount(50, $trace->meta);
+        $first_key = array_key_first($trace->meta);
+        $this->assertIsString($first_key);
+        $this->assertSame(80, strlen($first_key));
+        $this->assertSame(500, strlen($trace->meta[$first_key]));
+    }
+
     public function test_query_count_computed_from_db_spans(): void
     {
         $spans = [

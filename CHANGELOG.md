@@ -44,6 +44,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - WP-CLI trace commands now bound displayed row fields and handle missing or oversized trace IDs defensively
 - Stored trace payloads now normalize top-level fields and trace metadata before JSON encoding so extension metadata cannot bloat persistence
 - Stored numeric columns and span rows now clamp pathological timing, memory, source, and metadata values before persistence
+- Live trace and span construction now applies the same field, metadata, and span-count bounds as legacy trace hydration
+- Force-trace cookie cleanup now uses matched hardened cookie attributes, including `HttpOnly` and `SameSite=Strict`
+- Flame graph rendering now caps pathological parent-chain depth to avoid unbounded recursive rendering
+- Source attribution now guards plugin, mu-plugin, theme, and core directory roots before path matching
 
 ### Fixed
 - `composer test` no longer fatals when the WordPress integration framework is absent
@@ -88,7 +92,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - GraphQL endpoint detection now normalizes malformed request URI and operation values before use
 - Shutdown now stops collection before storage-decision filters and only shows force-trace notices for traces allowed to store
 - Request-type detection and user-agent capture now normalize malformed server globals before use
+- Admin trace detail views and request handlers now bound legacy route, user, cache, IP, user-agent, nonce, and trace-ID strings before rendering or lookup
 - Runtime integer bounds, including early mu-plugin sampling bounds, now reject non-finite numeric values instead of letting casts collapse protective limits
+- Stored trace reads now refuse oversized legacy JSON blobs before decoding to keep admin detail views bounded
 - Dashboard abuse insights now ignore malformed aggregate rows and non-scalar pagination parameters without PHP warnings
 - Trace insight rules now normalize malformed span/cache metadata before parsing or formatting
 - Flame graph cache summary now normalizes malformed cache metadata before rendering

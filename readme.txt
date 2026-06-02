@@ -94,7 +94,8 @@ Those require SaaS subscriptions and PHP extensions. WP Flame is free, self-host
 * Sortable, paginated trace list with request type and HTTP method filters
 * Multisite activation, uninstall, cron cleanup, and new-site provisioning improvements
 * Release packaging, CI, WordPress integration, and wp-env compatibility smoke-test hardening
-* Admin flame graph, score, insight, dashboard, and stored-trace parsing hardening for malformed trace data
+* Admin flame graph, score, insight, dashboard, source attribution, and stored-trace parsing hardening for malformed trace data
+* Live trace/span construction, force-trace cookies, and flame graph rendering hardened against pathological input sizes
 * UTC storage/query consistency and safer inline-script data handling
 
 = 1.1.1 =

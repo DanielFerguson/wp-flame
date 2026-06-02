@@ -11,6 +11,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 class Instrumentation
 {
     public const FORCE_TRACE_NONCE_ACTION = 'wp_flame_force_trace';
+    private const MAX_NOTICE_TRACE_ID_BYTES = 128;
 
     /**
      * Decide whether this request should pay the full instrumentation cost.
@@ -143,6 +144,61 @@ class Instrumentation
     }
 
     /**
+     * Build deletion headers for the one-shot force-trace cookie.
+     *
+     * @param array<int, string> $paths
+     * @return array<int, array{expires: int, path: string, domain: string, secure: bool, httponly: bool, samesite: string}>
+     */
+    public static function force_trace_cookie_delete_options( array $paths, string $domain = '', bool $secure = false ): array
+    {
+        $options = [];
+        $seen    = [];
+        $domain  = trim( $domain );
+
+        foreach ( $paths as $path ) {
+            $path = is_string( $path ) ? trim( $path ) : '';
+            if ( $path === '' ) {
+                $path = '/';
+            }
+
+            if ( $path[0] !== '/' ) {
+                $path = '/' . $path;
+            }
+
+            if ( isset( $seen[ $path ] ) ) {
+                continue;
+            }
+
+            $seen[ $path ] = true;
+            $options[] = [
+                'expires'  => time() - 3600,
+                'path'     => $path,
+                'domain'   => $domain,
+                'secure'   => $secure,
+                'httponly' => true,
+                'samesite' => 'Strict',
+            ];
+        }
+
+        return $options;
+    }
+
+    /**
+     * Normalize transient-provided trace IDs before using them in admin notices.
+     *
+     * @param mixed $value
+     */
+    public static function notice_trace_id( $value ): string
+    {
+        $trace_id = trim( Config::string_value( $value, '' ) );
+        if ( $trace_id === '' ) {
+            return '';
+        }
+
+        return substr( $trace_id, 0, self::MAX_NOTICE_TRACE_ID_BYTES );
+    }
+
+    /**
      * Determine whether this plugin is active network-wide from WordPress'
      * active_sitewide_plugins option shape.
      *
@@ -221,7 +277,7 @@ class Instrumentation
                 continue;
             }
 
-            if ( ! $instrumentor->is_applicable() ) {
+            if ( ! self::instrumentor_is_applicable( $instrumentor ) ) {
                 continue;
             }
 
@@ -232,9 +288,10 @@ class Instrumentation
                 $define_savequeries();
             }
 
-            $graphql_active = true;
-            $instrumentor->register( $collector );
-            $registered[] = get_class( $instrumentor );
+            if ( self::register_instrumentor( $instrumentor, $collector ) ) {
+                $graphql_active = true;
+                $registered[]   = get_class( $instrumentor );
+            }
         }
 
         foreach ( $instrumentors as $instrumentor ) {
@@ -250,17 +307,51 @@ class Instrumentation
                 continue;
             }
 
-            if ( ! $instrumentor->is_applicable() ) {
+            if ( ! self::instrumentor_is_applicable( $instrumentor ) ) {
                 continue;
             }
 
-            $instrumentor->register( $collector );
-            $registered[] = get_class( $instrumentor );
+            if ( self::register_instrumentor( $instrumentor, $collector ) ) {
+                $registered[] = get_class( $instrumentor );
+            }
         }
 
         return [
             'graphql_active' => $graphql_active,
             'registered'     => $registered,
         ];
+    }
+
+    private static function instrumentor_is_applicable( Instrumentor $instrumentor ): bool
+    {
+        try {
+            return $instrumentor->is_applicable();
+        } catch ( \Throwable $e ) {
+            self::log_instrumentor_failure( 'applicability', $instrumentor, $e );
+            return false;
+        }
+    }
+
+    private static function register_instrumentor( Instrumentor $instrumentor, Collector $collector ): bool
+    {
+        try {
+            $instrumentor->register( $collector );
+            return true;
+        } catch ( \Throwable $e ) {
+            self::log_instrumentor_failure( 'registration', $instrumentor, $e );
+            return false;
+        }
+    }
+
+    private static function log_instrumentor_failure( string $phase, Instrumentor $instrumentor, \Throwable $e ): void
+    {
+        $should_log = defined( 'WP_DEBUG' ) && WP_DEBUG;
+        $should_log = Config::boolean( apply_filters( 'wp_flame_log_instrumentor_failures', $should_log, $phase, $instrumentor, $e ) );
+
+        if ( ! $should_log ) {
+            return;
+        }
+
+        error_log( 'WP Flame: Instrumentor ' . $phase . ' failed for ' . get_class( $instrumentor ) . ': ' . $e->getMessage() );
     }
 }

@@ -115,8 +115,19 @@ function wp_flame_initialize_new_site( $new_site ): void {
     }
 }
 
+function wp_flame_mu_plugin_dir(): string {
+    return defined( 'WPMU_PLUGIN_DIR' ) && is_string( WPMU_PLUGIN_DIR ) && WPMU_PLUGIN_DIR !== ''
+        ? WPMU_PLUGIN_DIR
+        : '';
+}
+
 function wp_flame_install_mu_plugin(): void {
-    $mu_dir  = WPMU_PLUGIN_DIR;
+    $mu_dir = wp_flame_mu_plugin_dir();
+    if ( $mu_dir === '' ) {
+        update_option( 'wp_flame_mu_plugin_failed', true );
+        return;
+    }
+
     $mu_src  = WP_FLAME_DIR . 'mu-plugin/wp-flame-early-hooks.php';
     $mu_dest = $mu_dir . '/wp-flame-early-hooks.php';
 
@@ -149,7 +160,12 @@ function wp_flame_deactivate( bool $network_wide = false ): void {
     }
 
     // Remove mu-plugin only when no other activation still needs it.
-    $mu_file = WPMU_PLUGIN_DIR . '/wp-flame-early-hooks.php';
+    $mu_dir = wp_flame_mu_plugin_dir();
+    if ( $mu_dir === '' ) {
+        return;
+    }
+
+    $mu_file = $mu_dir . '/wp-flame-early-hooks.php';
     $still_needed = $network_wide ? wp_flame_is_active_on_any_site() : wp_flame_is_active_elsewhere();
     if ( ! $still_needed && file_exists( $mu_file ) ) {
         @unlink( $mu_file );
@@ -314,12 +330,9 @@ function wp_flame_clear_force_trace_cookie(): void {
     }
 
     $domain = defined( 'COOKIE_DOMAIN' ) && is_string( COOKIE_DOMAIN ) ? COOKIE_DOMAIN : '';
-    foreach ( array_unique( $paths ) as $path ) {
-        if ( $domain !== '' ) {
-            setcookie( 'wp_flame_force_trace', '', time() - 3600, $path, $domain );
-        } else {
-            setcookie( 'wp_flame_force_trace', '', time() - 3600, $path );
-        }
+    $secure = function_exists( 'is_ssl' ) && is_ssl();
+    foreach ( WPFlame\Instrumentation::force_trace_cookie_delete_options( $paths, $domain, $secure ) as $options ) {
+        setcookie( 'wp_flame_force_trace', '', $options );
     }
 
     unset( $_COOKIE['wp_flame_force_trace'] );
@@ -398,7 +411,7 @@ function wp_flame_register_plugin_services( \wpdb $wpdb ): void {
 		if ( ! current_user_can( 'manage_options' ) ) {
 			return;
 		}
-		$trace_id = WPFlame\Config::string_value( get_transient( 'wp_flame_last_force_trace_' . get_current_user_id() ), '' );
+		$trace_id = WPFlame\Instrumentation::notice_trace_id( get_transient( 'wp_flame_last_force_trace_' . get_current_user_id() ) );
 		if ( $trace_id !== '' ) {
 			delete_transient( 'wp_flame_last_force_trace_' . get_current_user_id() );
 			$url = admin_url( 'tools.php?page=wp-flame&trace_id=' . urlencode( $trace_id ) );

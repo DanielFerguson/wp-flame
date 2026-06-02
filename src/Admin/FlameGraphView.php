@@ -15,6 +15,14 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class FlameGraphView
 {
+    private const MAX_URL_BYTES = 2048;
+    private const MAX_METHOD_BYTES = 20;
+    private const MAX_IP_BYTES = 45;
+    private const MAX_USER_AGENT_BYTES = 500;
+    private const MAX_USER_LABEL_BYTES = 200;
+    private const MAX_ROLE_LABEL_BYTES = 200;
+    private const MAX_CACHE_BACKEND_BYTES = 120;
+
     /** @var Storage */
     private $storage;
 
@@ -34,17 +42,19 @@ class FlameGraphView
         }
 
         $score = Score::calculate($trace);
+        $trace_method = $this->limit_string($trace->method, self::MAX_METHOD_BYTES);
+        $trace_url = $this->limit_string($trace->url, self::MAX_URL_BYTES);
 
         echo '<div class="wrap">';
         echo '<h1>';
         echo '<a href="' . esc_url(admin_url('tools.php?page=wp-flame')) . '">&larr; ' . esc_html__('All Traces', 'wp-flame') . '</a>';
-        echo ' &mdash; ' . esc_html($trace->method) . ' ' . esc_html($trace->url);
+        echo ' &mdash; ' . esc_html($trace_method) . ' ' . esc_html($trace_url);
         echo '</h1>';
 
         // Route comparison: how does this request compare to the average for this URL?
-        $route_stats = $this->route_stats($this->storage->get_route_stats($trace->url, 7));
+        $route_stats = $this->route_stats($this->storage->get_route_stats($trace_url, 7));
         if ($route_stats !== null) {
-            $route_path = explode('?', $trace->url, 2)[0];
+            $route_path = $this->limit_string(explode('?', $trace_url, 2)[0], self::MAX_URL_BYTES);
             $diff_ms    = $trace->total_ms - $route_stats['avg_ms'];
             $diff_pct   = $route_stats['avg_ms'] > 0 ? round(($diff_ms / $route_stats['avg_ms']) * 100) : 0;
 
@@ -113,7 +123,7 @@ class FlameGraphView
         echo '</div>';
 
         echo '<div class="wp-flame-stat-right">';
-        echo esc_html($trace->method) . ' ' . esc_html($trace->url) . ' &mdash; ' . esc_html(round($trace->total_ms)) . 'ms';
+        echo esc_html($trace_method) . ' ' . esc_html($trace_url) . ' &mdash; ' . esc_html(round($trace->total_ms)) . 'ms';
         echo '</div>';
         echo '</div>';
 
@@ -125,9 +135,9 @@ class FlameGraphView
             $ctx_user = get_userdata($ctx_user_id);
             if ($ctx_user) {
                 $ctx_roles = isset($ctx_user->roles) && is_array($ctx_user->roles)
-                    ? implode(', ', array_map([Config::class, 'string_value'], $ctx_user->roles))
+                    ? $this->roles_label($ctx_user->roles)
                     : '';
-                $ctx_display_name = Config::string_value($ctx_user->display_name ?? '', '');
+                $ctx_display_name = $this->limit_string(Config::string_value($ctx_user->display_name ?? '', ''), self::MAX_USER_LABEL_BYTES);
                 if ($ctx_display_name === '') {
                     $ctx_display_name = '#' . $ctx_user_id;
                 }
@@ -169,7 +179,7 @@ class FlameGraphView
         echo '</div>';
 
         // Limited instrumentation notice for Tier 2 GraphQL traces
-        $is_graphql_url = strpos($trace->url, '/graphql') !== false;
+        $is_graphql_url = strpos($trace_url, '/graphql') !== false;
         $has_resolver_spans = false;
         if ($is_graphql_url) {
             foreach ($trace->spans as $span) {
@@ -272,8 +282,8 @@ class FlameGraphView
     {
         return [
             'user_id'    => Config::bounded_int($meta['_row_user_id'] ?? 0, 0, 0, PHP_INT_MAX),
-            'ip_address' => Config::string_value($meta['_row_ip_address'] ?? '', ''),
-            'user_agent' => Config::string_value($meta['user_agent'] ?? '', ''),
+            'ip_address' => $this->limit_string(Config::string_value($meta['_row_ip_address'] ?? '', ''), self::MAX_IP_BYTES),
+            'user_agent' => $this->limit_string(Config::string_value($meta['user_agent'] ?? '', ''), self::MAX_USER_AGENT_BYTES),
         ];
     }
 
@@ -292,7 +302,7 @@ class FlameGraphView
         $ratio_total = (float) $hits + (float) $misses;
         $total = $hits > PHP_INT_MAX - $misses ? PHP_INT_MAX : $hits + $misses;
         $ratio = $ratio_total > 0.0 ? (int) round(($hits / $ratio_total) * 100) : 0;
-        $backend = Config::string_value($meta['cache_backend'] ?? 'WP_Object_Cache', 'WP_Object_Cache');
+        $backend = $this->limit_string(Config::string_value($meta['cache_backend'] ?? 'WP_Object_Cache', 'WP_Object_Cache'), self::MAX_CACHE_BACKEND_BYTES);
         $short_backend = $backend === 'WP_Object_Cache'
             ? __('In-Memory', 'wp-flame')
             : str_replace('_Object_Cache', '', $backend);
@@ -321,5 +331,31 @@ class FlameGraphView
         }
 
         return $fallback;
+    }
+
+    /**
+     * @param array<int|string, mixed> $roles
+     */
+    private function roles_label(array $roles): string
+    {
+        $labels = [];
+
+        foreach ($roles as $role) {
+            $role = $this->limit_string(Config::string_value($role, ''), self::MAX_ROLE_LABEL_BYTES);
+            if ($role !== '') {
+                $labels[] = $role;
+            }
+        }
+
+        return $this->limit_string(implode(', ', $labels), self::MAX_ROLE_LABEL_BYTES);
+    }
+
+    private function limit_string(string $value, int $max_bytes): string
+    {
+        if (strlen($value) <= $max_bytes) {
+            return $value;
+        }
+
+        return substr($value, 0, $max_bytes);
     }
 }

@@ -112,7 +112,7 @@ WP_TESTS_DIR=/tmp/wordpress-tests-lib composer test:integration
 Optional wp-env compatibility smoke testing requires Node dependencies and Docker:
 
 ```bash
-npm install
+npm ci
 npm run compat:smoke
 ```
 

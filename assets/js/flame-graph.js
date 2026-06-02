@@ -10,6 +10,7 @@
     var ROW_HEIGHT = 24;
     var MIN_WIDTH_PX = 2;
     var MAX_RENDER_SPANS = 5000;
+    var MAX_RENDER_DEPTH = 200;
     var COLORS = {
         core: '#6c7086',
         plugin: '#7c3aed',
@@ -64,10 +65,15 @@
     }
 
     // Compute max depth for SVG height
-    function getDepth(node) {
+    function getDepth(node, depth) {
+        depth = depth || 0;
+        if (depth >= MAX_RENDER_DEPTH) {
+            return 1;
+        }
+
         var max = 0;
         for (var j = 0; j < node.children.length; j++) {
-            var d = getDepth(node.children[j]);
+            var d = getDepth(node.children[j], depth + 1);
             if (d > max) max = d;
         }
         return max + 1;
@@ -75,7 +81,7 @@
 
     var maxDepth = 0;
     for (i = 0; i < roots.length; i++) {
-        var d = getDepth(roots[i]);
+        var d = getDepth(roots[i], 0);
         if (d > maxDepth) maxDepth = d;
     }
 
@@ -201,6 +207,10 @@
         svgParts.push('<text x="4" y="' + (frY + ROW_HEIGHT - 7) + '" fill="#444" font-size="11" font-family="monospace">Full request</text>');
 
         function renderSpan(s, depth) {
+            if (depth > MAX_RENDER_DEPTH) {
+                return;
+            }
+
             var startMs = toNumber(s.start_ms, 0);
             var durationMs = Math.max(0, toNumber(s.duration_ms, 0));
             var x = ((startMs - viewStart) / timeRange) * width;

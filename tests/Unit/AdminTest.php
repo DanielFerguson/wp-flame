@@ -117,6 +117,17 @@ namespace WPFlame\Tests\Unit {
             $this->assertSame([], $warnings);
         }
 
+        public function test_request_string_bounds_oversized_values(): void
+        {
+            $admin = new Admin($this->createMock(Storage::class));
+            $method = new ReflectionMethod(Admin::class, 'request_string');
+            $method->setAccessible(true);
+
+            $result = $method->invoke($admin, ['trace_id' => str_repeat('t', 3000)], 'trace_id');
+
+            $this->assertSame(2048, strlen($result));
+        }
+
         private function render_notices(): string
         {
             $admin = new Admin($this->createMock(Storage::class));

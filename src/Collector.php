@@ -349,27 +349,41 @@ class Collector
         $result = ['type' => Span::TYPE_PHP, 'source' => basename($file_path)];
 
         // Check if file is in a plugin
-        if (defined('WP_PLUGIN_DIR') && self::path_is_inside_directory($file_path, WP_PLUGIN_DIR)) {
-            $relative = substr($file_path, strlen(WP_PLUGIN_DIR) + 1);
+        $plugin_dir = self::directory_constant('WP_PLUGIN_DIR');
+        $mu_plugin_dir = self::directory_constant('WPMU_PLUGIN_DIR');
+        $template_dir = function_exists('get_template_directory') ? Config::string_value(get_template_directory(), '') : '';
+        $abspath = self::directory_constant('ABSPATH');
+
+        if ($plugin_dir !== '' && self::path_is_inside_directory($file_path, $plugin_dir)) {
+            $relative = substr($file_path, strlen($plugin_dir) + 1);
             $parts = explode('/', $relative, 2);
             $result = ['type' => Span::TYPE_PLUGIN, 'source' => $parts[0]];
         }
         // Check if file is in mu-plugins
-        elseif (defined('WPMU_PLUGIN_DIR') && self::path_is_inside_directory($file_path, WPMU_PLUGIN_DIR)) {
-            $relative = substr($file_path, strlen(WPMU_PLUGIN_DIR) + 1);
+        elseif ($mu_plugin_dir !== '' && self::path_is_inside_directory($file_path, $mu_plugin_dir)) {
+            $relative = substr($file_path, strlen($mu_plugin_dir) + 1);
             $result = ['type' => Span::TYPE_PLUGIN, 'source' => 'mu:' . explode('/', $relative, 2)[0]];
         }
         // Check if file is in a theme
-        elseif (function_exists('get_template_directory') && self::path_is_inside_directory($file_path, get_template_directory())) {
-            $result = ['type' => Span::TYPE_THEME, 'source' => basename(get_template_directory())];
+        elseif ($template_dir !== '' && self::path_is_inside_directory($file_path, $template_dir)) {
+            $result = ['type' => Span::TYPE_THEME, 'source' => basename($template_dir)];
         }
         // Check if file is WordPress core
-        elseif (defined('ABSPATH') && self::path_is_inside_directory($file_path, ABSPATH)) {
+        elseif ($abspath !== '' && self::path_is_inside_directory($file_path, $abspath)) {
             $result = ['type' => Span::TYPE_CORE, 'source' => 'wordpress'];
         }
 
         self::$source_cache[$file_path] = $result;
         return $result;
+    }
+
+    private static function directory_constant(string $name): string
+    {
+        if (! defined($name)) {
+            return '';
+        }
+
+        return Config::string_value(constant($name), '');
     }
 
     private static function path_is_inside_directory(string $path, string $directory): bool

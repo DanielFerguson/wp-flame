@@ -3,6 +3,7 @@
 namespace WPFlame\Tests\Unit;
 
 use PHPUnit\Framework\TestCase;
+use WPFlame\Redactor;
 use WPFlame\Span;
 
 class SpanTest extends TestCase
@@ -60,6 +61,65 @@ class SpanTest extends TestCase
 
         $this->assertSame(0.0, $span->start_ms);
         $this->assertSame(0.0, $span->duration_ms);
+    }
+
+    public function test_constructor_bounds_live_string_fields_and_meta(): void
+    {
+        $meta = [];
+        for ($i = 0; $i < 60; $i++) {
+            $meta['meta_key_' . $i . str_repeat('k', 100)] = str_repeat('value', 200);
+        }
+
+        $span = new Span(
+            str_repeat('i', 300),
+            str_repeat('p', 300),
+            str_repeat('n', 400),
+            str_repeat('t', 80),
+            str_repeat('s', 300),
+            1.0,
+            2.0,
+            $meta
+        );
+
+        $this->assertSame(128, strlen($span->id));
+        $this->assertSame(128, strlen((string) $span->parent_id));
+        $this->assertSame(300, strlen($span->name));
+        $this->assertSame(40, strlen($span->type));
+        $this->assertSame(200, strlen($span->source));
+        $this->assertCount(50, $span->meta);
+        $first_key = array_key_first($span->meta);
+        $this->assertIsString($first_key);
+        $this->assertSame(80, strlen($first_key));
+        $this->assertSame(500, strlen($span->meta[$first_key]));
+    }
+
+    public function test_constructor_treats_empty_bounded_parent_id_as_root(): void
+    {
+        $span = new Span('s1', '', 'Root', Span::TYPE_PHP, 'test', 0.0, 1.0);
+
+        $this->assertNull($span->parent_id);
+    }
+
+    public function test_constructor_preserves_explicit_opt_in_query_metadata_caps(): void
+    {
+        $span = new Span(
+            's1',
+            null,
+            'Query',
+            Span::TYPE_DB,
+            'test',
+            0.0,
+            1.0,
+            [
+                'query'         => str_repeat('q', Redactor::MAX_SQL_LABEL_BYTES + 100),
+                'graphql_query' => str_repeat('g', 65536 + 100),
+                'other'         => str_repeat('o', 1000),
+            ]
+        );
+
+        $this->assertSame(Redactor::MAX_SQL_LABEL_BYTES, strlen($span->meta['query']));
+        $this->assertSame(65536, strlen($span->meta['graphql_query']));
+        $this->assertSame(500, strlen($span->meta['other']));
     }
 
     public function test_type_constants_exist(): void

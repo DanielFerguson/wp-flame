@@ -150,6 +150,23 @@ class FlameGraphViewTest extends TestCase
         ], $context);
     }
 
+    public function test_request_context_bounds_legacy_ip_and_user_agent_values(): void
+    {
+        $view = new FlameGraphView($this->createMock(Storage::class));
+        $method = new ReflectionMethod(FlameGraphView::class, 'request_context');
+        $method->setAccessible(true);
+
+        $context = $method->invoke($view, [
+            '_row_user_id'    => 12,
+            '_row_ip_address' => str_repeat('1', 100),
+            'user_agent'      => str_repeat('a', 1000),
+        ]);
+
+        $this->assertSame(12, $context['user_id']);
+        $this->assertSame(45, strlen($context['ip_address']));
+        $this->assertSame(500, strlen($context['user_agent']));
+    }
+
     public function test_cache_summary_caps_pathological_totals(): void
     {
         $view = new FlameGraphView($this->createMock(Storage::class));
@@ -183,5 +200,34 @@ class FlameGraphViewTest extends TestCase
             'ratio'   => 80,
             'backend' => 'Redis',
         ], $summary);
+    }
+
+    public function test_cache_summary_bounds_legacy_backend_names(): void
+    {
+        $view = new FlameGraphView($this->createMock(Storage::class));
+        $method = new ReflectionMethod(FlameGraphView::class, 'cache_summary');
+        $method->setAccessible(true);
+
+        $summary = $method->invoke($view, [
+            'cache_hits'    => 1,
+            'cache_misses'  => 0,
+            'cache_backend' => str_repeat('x', 300),
+        ]);
+
+        $this->assertSame(120, strlen($summary['backend']));
+    }
+
+    public function test_roles_label_bounds_legacy_role_values(): void
+    {
+        $view = new FlameGraphView($this->createMock(Storage::class));
+        $method = new ReflectionMethod(FlameGraphView::class, 'roles_label');
+        $method->setAccessible(true);
+
+        $label = $method->invoke($view, [
+            str_repeat('a', 300),
+            str_repeat('b', 300),
+        ]);
+
+        $this->assertSame(200, strlen($label));
     }
 }

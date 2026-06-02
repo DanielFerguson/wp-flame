@@ -51,16 +51,18 @@ class Trace
         array $spans,
         array $meta = []
     ) {
-        $this->id          = $id;
-        $this->url         = $url;
-        $this->method      = $method;
-        $this->timestamp   = $timestamp;
+        $spans = self::normalize_spans( $spans );
+
+        $this->id          = self::limit_string( $id, self::MAX_TRACE_ID_BYTES );
+        $this->url         = self::limit_string( $url, self::MAX_URL_BYTES );
+        $this->method      = self::limit_string( $method, self::MAX_METHOD_BYTES );
+        $this->timestamp   = self::limit_string( $timestamp, self::MAX_TIMESTAMP_BYTES );
         $this->total_ms    = is_finite($total_ms) ? max(0.0, $total_ms) : 0.0;
         $this->peak_memory = max(0, $peak_memory);
-        $this->php_version = $php_version;
-        $this->wp_version  = $wp_version;
+        $this->php_version = self::limit_string( $php_version, self::MAX_VERSION_BYTES );
+        $this->wp_version  = self::limit_string( $wp_version, self::MAX_VERSION_BYTES );
         $this->spans       = $spans;
-        $this->meta        = $meta;
+        $this->meta        = self::normalize_meta( $meta );
 
         // Compute query aggregates from DB-type spans
         $this->query_count    = 0;
@@ -71,6 +73,27 @@ class Trace
                 $this->total_query_ms += $span->duration_ms;
             }
         }
+    }
+
+    /**
+     * @param array<mixed> $spans
+     * @return Span[]
+     */
+    private static function normalize_spans( array $spans ): array
+    {
+        $normalized = [];
+
+        foreach ( $spans as $span ) {
+            if ( count( $normalized ) >= self::MAX_HYDRATED_SPANS ) {
+                break;
+            }
+
+            if ( $span instanceof Span ) {
+                $normalized[] = $span;
+            }
+        }
+
+        return $normalized;
     }
 
     public function toArray(): array

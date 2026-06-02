@@ -10,6 +10,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class Admin
 {
+    private const MAX_REQUEST_STRING_BYTES = 2048;
+
     private Storage $storage;
 
     public function __construct(Storage $storage)
@@ -119,7 +121,19 @@ class Admin
             return '';
         }
 
-        return sanitize_text_field(Config::string_value(wp_unslash($source[$key]), ''));
+        return $this->limit_string(
+            sanitize_text_field(Config::string_value(wp_unslash($source[$key]), '')),
+            self::MAX_REQUEST_STRING_BYTES
+        );
+    }
+
+    private function limit_string(string $value, int $max_bytes): string
+    {
+        if (strlen($value) <= $max_bytes) {
+            return $value;
+        }
+
+        return substr($value, 0, $max_bytes);
     }
 
     public function render_notices(): void
@@ -128,7 +142,8 @@ class Admin
             return;
         }
 
-        $mu_file = defined('WPMU_PLUGIN_DIR') ? WPMU_PLUGIN_DIR . '/wp-flame-early-hooks.php' : '';
+        $mu_dir = function_exists('\wp_flame_mu_plugin_dir') ? \wp_flame_mu_plugin_dir() : (defined('WPMU_PLUGIN_DIR') ? WPMU_PLUGIN_DIR : '');
+        $mu_file = $mu_dir !== '' ? $mu_dir . '/wp-flame-early-hooks.php' : '';
         if ($mu_file && ! file_exists($mu_file)) {
             echo '<div class="notice notice-warning"><p>';
             echo wp_kses_post(

@@ -155,6 +155,17 @@ class SettingsTest extends TestCase
         $this->assertSame([], $warnings);
     }
 
+    public function test_request_string_bounds_oversized_nonce_values(): void
+    {
+        $settings = new Settings($this->createMock(Storage::class));
+        $method = new ReflectionMethod(Settings::class, 'request_string');
+        $method->setAccessible(true);
+
+        $result = $method->invoke($settings, ['_wpnonce' => str_repeat('n', 3000)], '_wpnonce');
+
+        $this->assertSame(2048, strlen($result));
+    }
+
     public function test_numeric_fields_render_defaults_for_malformed_option_values_without_warnings(): void
     {
         $GLOBALS['wp_flame_test_options'] = [

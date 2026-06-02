@@ -524,6 +524,21 @@ namespace WPFlame\Tests\Unit {
             $this->assertSame('', $trace->meta['_row_created_at']);
         }
 
+        public function test_get_trace_refuses_oversized_legacy_trace_json_before_decode(): void
+        {
+            $wpdb = new \WPFlame_TimeBreakdown_WPDB();
+            $wpdb->row_result = (object) [
+                'trace_data' => str_repeat('{', Config::MAX_MAX_TRACE_BYTES + 1),
+                'user_id'    => 0,
+                'ip_address' => '',
+                'score'      => null,
+                'created_at' => '',
+            ];
+            $storage = new Storage($wpdb);
+
+            $this->assertNull($storage->get_trace('trace-1'));
+        }
+
         public function test_save_trace_bounds_indexed_column_lengths(): void
         {
             $wpdb = new \wpdb();

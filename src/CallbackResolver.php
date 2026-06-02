@@ -201,19 +201,32 @@ class CallbackResolver
 
     private static function relative_path(string $file): string
     {
-        if (defined('WP_PLUGIN_DIR') && self::path_is_inside_directory($file, WP_PLUGIN_DIR)) {
-            return substr($file, strlen(WP_PLUGIN_DIR) + 1);
+        $plugin_dir = self::directory_constant('WP_PLUGIN_DIR');
+        $template_dir = function_exists('get_template_directory') ? Config::string_value(get_template_directory(), '') : '';
+        $abspath = self::directory_constant('ABSPATH');
+
+        if ($plugin_dir !== '' && self::path_is_inside_directory($file, $plugin_dir)) {
+            return substr($file, strlen($plugin_dir) + 1);
         }
 
-        if (function_exists('get_template_directory') && self::path_is_inside_directory($file, get_template_directory())) {
-            return substr($file, strlen(get_template_directory()) + 1);
+        if ($template_dir !== '' && self::path_is_inside_directory($file, $template_dir)) {
+            return substr($file, strlen($template_dir) + 1);
         }
 
-        if (defined('ABSPATH') && self::path_is_inside_directory($file, ABSPATH)) {
-            return substr($file, strlen(ABSPATH));
+        if ($abspath !== '' && self::path_is_inside_directory($file, $abspath)) {
+            return substr($file, strlen($abspath));
         }
 
         return basename($file);
+    }
+
+    private static function directory_constant(string $name): string
+    {
+        if (! defined($name)) {
+            return '';
+        }
+
+        return Config::string_value(constant($name), '');
     }
 
     private static function path_is_inside_directory(string $path, string $directory): bool

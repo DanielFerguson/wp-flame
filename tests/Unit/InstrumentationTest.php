@@ -75,6 +75,46 @@ class InstrumentationTest extends TestCase
         $this->assertFalse(Instrumentation::is_force_trace_request(['valid-nonce'], true, true, $verifier));
     }
 
+    public function test_force_trace_cookie_delete_options_match_hardened_cookie_attributes(): void
+    {
+        $before = time() - 3600;
+        $options = Instrumentation::force_trace_cookie_delete_options(
+            ['/', '/wp-admin', 'wp-admin', ''],
+            '.example.test',
+            true
+        );
+        $after = time() - 3600;
+
+        $this->assertCount(2, $options);
+        $this->assertSame('/', $options[0]['path']);
+        $this->assertSame('/wp-admin', $options[1]['path']);
+
+        foreach ($options as $option) {
+            $this->assertGreaterThanOrEqual($before - 1, $option['expires']);
+            $this->assertLessThanOrEqual($after + 1, $option['expires']);
+            $this->assertSame('.example.test', $option['domain']);
+            $this->assertTrue($option['secure']);
+            $this->assertTrue($option['httponly']);
+            $this->assertSame('Strict', $option['samesite']);
+        }
+    }
+
+    public function test_force_trace_cookie_delete_options_preserve_insecure_http_context(): void
+    {
+        $options = Instrumentation::force_trace_cookie_delete_options(['/'], '', false);
+
+        $this->assertFalse($options[0]['secure']);
+        $this->assertSame('', $options[0]['domain']);
+    }
+
+    public function test_notice_trace_id_bounds_transient_values_for_admin_links(): void
+    {
+        $this->assertSame('', Instrumentation::notice_trace_id(['bad']));
+        $this->assertSame('', Instrumentation::notice_trace_id('   '));
+        $this->assertSame('trace-1', Instrumentation::notice_trace_id(' trace-1 '));
+        $this->assertSame(128, strlen(Instrumentation::notice_trace_id(str_repeat('t', 300))));
+    }
+
     public function test_network_active_plugin_detection_supports_sitewide_option_shape(): void
     {
         $this->assertTrue(Instrumentation::is_network_active_plugin(
@@ -353,6 +393,40 @@ class InstrumentationTest extends TestCase
         $this->assertFalse($graphql->registered);
         $this->assertTrue($db->registered);
     }
+
+    public function test_register_instrumentors_skips_throwing_custom_instrumentors(): void
+    {
+        $collector = Collector::instance();
+        $collector->start_request(1000.0);
+
+        $other = new TestOtherInstrumentor();
+        $result = Instrumentation::register_instrumentors(
+            [
+                new TestThrowingInstrumentor('applicable'),
+                new TestThrowingInstrumentor('register'),
+                $other,
+            ],
+            $collector
+        );
+
+        $this->assertTrue($other->registered);
+        $this->assertSame([TestOtherInstrumentor::class], $result['registered']);
+    }
+
+    public function test_graphql_registration_failure_does_not_block_db_fallback(): void
+    {
+        $collector = Collector::instance();
+        $collector->start_request(1000.0);
+
+        $db = new TestDbInstrumentor();
+        $graphql = new TestThrowingGraphQL();
+
+        $result = Instrumentation::register_instrumentors([$graphql, $db], $collector);
+
+        $this->assertFalse($result['graphql_active']);
+        $this->assertTrue($db->registered);
+        $this->assertSame([TestDbInstrumentor::class], $result['registered']);
+    }
 }
 
 class TestGraphQL extends GraphQL
@@ -414,5 +488,46 @@ class TestOtherInstrumentor implements Instrumentor
     public function register(Collector $collector): void
     {
         $this->registered = true;
+    }
+}
+
+class TestThrowingInstrumentor implements Instrumentor
+{
+    private string $throw_at;
+
+    public function __construct(string $throw_at)
+    {
+        $this->throw_at = $throw_at;
+    }
+
+    public function is_applicable(): bool
+    {
+        if ($this->throw_at === 'applicable') {
+            throw new \RuntimeException('applicable failed');
+        }
+
+        return true;
+    }
+
+    public function register(Collector $collector): void
+    {
+        throw new \RuntimeException('register failed');
+    }
+}
+
+class TestThrowingGraphQL extends GraphQL
+{
+    public function __construct()
+    {
+    }
+
+    public function is_applicable(): bool
+    {
+        return true;
+    }
+
+    public function register(Collector $collector): void
+    {
+        throw new \RuntimeException('graphql failed');
     }
 }
