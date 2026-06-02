@@ -19,6 +19,26 @@ function wp_flame_uninstall_mu_plugin_dir(): string {
         : '';
 }
 
+/**
+ * @return array<int, int>
+ */
+function wp_flame_uninstall_all_site_ids(): array {
+    if ( ! function_exists( 'get_sites' ) ) {
+        return [];
+    }
+
+    $site_ids = get_sites( [
+        'fields' => 'ids',
+        'number' => 0,
+    ] );
+
+    if ( ! is_array( $site_ids ) ) {
+        return [];
+    }
+
+    return array_map( 'intval', $site_ids );
+}
+
 function wp_flame_uninstall_site(): void {
     global $wpdb;
 
@@ -50,7 +70,7 @@ function wp_flame_uninstall_site(): void {
 }
 
 if ( is_multisite() && function_exists( 'get_sites' ) ) {
-    foreach ( get_sites( [ 'fields' => 'ids' ] ) as $blog_id ) {
+    foreach ( wp_flame_uninstall_all_site_ids() as $blog_id ) {
         switch_to_blog( (int) $blog_id );
         try {
             wp_flame_uninstall_site();

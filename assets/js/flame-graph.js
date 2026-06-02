@@ -276,6 +276,8 @@
     }
 
     function showTooltip(e) {
+        if (!tooltipEl) return;
+
         var el = e.currentTarget;
         var name = el.getAttribute('data-name');
         var duration = el.getAttribute('data-duration');
@@ -304,6 +306,8 @@
     }
 
     function moveTooltip(e) {
+        if (!tooltipEl) return;
+
         var tipWidth = tooltipEl.offsetWidth;
         var tipHeight = tooltipEl.offsetHeight;
         var viewWidth = window.innerWidth;
@@ -326,6 +330,8 @@
     }
 
     function hideTooltip() {
+        if (!tooltipEl) return;
+
         tooltipEl.style.display = 'none';
         document.removeEventListener('mousemove', moveTooltip);
     }

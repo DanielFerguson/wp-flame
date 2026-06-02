@@ -124,10 +124,12 @@ rm -f "$OUTFILE"
 
 ZIP_MANIFEST=$(unzip -Z1 "$OUTFILE")
 if echo "$ZIP_MANIFEST" | grep -Eq '(^|/)(tests|node_modules|\.github|bin)/'; then
+    rm -f "$OUTFILE"
     echo "Build artifact contains dev-only directories." >&2
     exit 1
 fi
 if echo "$ZIP_MANIFEST" | grep -Eq '(^|/)(\.DS_Store|\.gitignore|\.phpunit\.result\.cache|\.wp-env\.json|package\.json|package-lock\.json|composer\.json|composer\.lock)$'; then
+    rm -f "$OUTFILE"
     echo "Build artifact contains dev-only files." >&2
     exit 1
 fi

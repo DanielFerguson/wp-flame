@@ -10,6 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class Admin
 {
+    private const MAX_TRACE_ID_BYTES = 36;
     private const MAX_REQUEST_STRING_BYTES = 2048;
 
     private Storage $storage;
@@ -45,7 +46,7 @@ class Admin
 
         $this->handle_delete();
 
-        $trace_id = $this->request_string($_GET, 'trace_id');
+        $trace_id = $this->request_string($_GET, 'trace_id', self::MAX_TRACE_ID_BYTES);
 
         if ($trace_id) {
             $view = new \WPFlame\Admin\FlameGraphView($this->storage);
@@ -62,7 +63,7 @@ class Admin
             return;
         }
 
-        $trace_id = $this->request_string($_POST, 'wp_flame_delete_trace');
+        $trace_id = $this->request_string($_POST, 'wp_flame_delete_trace', self::MAX_TRACE_ID_BYTES);
         if ($trace_id === '') {
             wp_die(esc_html__('Invalid trace ID.', 'wp-flame'));
         }
@@ -115,7 +116,7 @@ class Admin
     /**
      * @param array<string, mixed> $source
      */
-    private function request_string(array $source, string $key): string
+    private function request_string(array $source, string $key, int $max_bytes = self::MAX_REQUEST_STRING_BYTES): string
     {
         if (! array_key_exists($key, $source)) {
             return '';
@@ -123,7 +124,7 @@ class Admin
 
         return $this->limit_string(
             sanitize_text_field(Config::string_value(wp_unslash($source[$key]), '')),
-            self::MAX_REQUEST_STRING_BYTES
+            $max_bytes
         );
     }
 

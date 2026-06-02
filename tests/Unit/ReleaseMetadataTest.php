@@ -103,6 +103,14 @@ class ReleaseMetadataTest extends TestCase
         $this->assertStringContainsString('(^|/)(\\.DS_Store|\\.gitignore|\\.phpunit\\.result\\.cache|\\.wp-env\\.json|package\\.json|package-lock\\.json|composer\\.json|composer\\.lock)$', $script);
         $this->assertStringContainsString('Build artifact contains dev-only directories.', $script);
         $this->assertStringContainsString('Build artifact contains dev-only files.', $script);
+        $this->assertStringContainsString(
+            "if echo \"\$ZIP_MANIFEST\" | grep -Eq '(^|/)(tests|node_modules|\\.github|bin)/'; then\n    rm -f \"\$OUTFILE\"",
+            $script
+        );
+        $this->assertStringContainsString(
+            "if echo \"\$ZIP_MANIFEST\" | grep -Eq '(^|/)(\\.DS_Store|\\.gitignore|\\.phpunit\\.result\\.cache|\\.wp-env\\.json|package\\.json|package-lock\\.json|composer\\.json|composer\\.lock)$'; then\n    rm -f \"\$OUTFILE\"",
+            $script
+        );
     }
 
     private function file(string $path): string

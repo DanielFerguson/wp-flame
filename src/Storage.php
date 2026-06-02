@@ -13,6 +13,7 @@ class Storage
     const SCHEMA_VERSION = 3;
     public const DASHBOARD_TRACE_DATA_LIMIT = 25;
     public const DASHBOARD_MAX_TRACE_BYTES = 262144;
+    public const PRUNE_BATCH_LIMIT = 5000;
     private const MAX_TRACE_ID_BYTES = 36;
     private const MAX_STORED_MS = 86400000.0;
     private const MAX_STORED_BYTES = 1099511627776;
@@ -283,9 +284,12 @@ class Storage
             return null;
         }
 
-        $data = json_decode( $trace_data, true );
+        $data = json_decode( $trace_data, true, 32 );
         if ( ! is_array( $data ) ) {
-            error_log( 'WP Flame: Failed to decode trace ' . $trace_id . ': ' . json_last_error_msg() );
+            if ( json_last_error() !== JSON_ERROR_DEPTH ) {
+                error_log( 'WP Flame: Failed to decode trace ' . $trace_id . ': ' . json_last_error_msg() );
+            }
+
             return null;
         }
 
@@ -318,12 +322,19 @@ class Storage
         }
 
         $min_duration = $this->number_or_null($filters['min_duration'] ?? null);
+        $max_duration = $this->number_or_null($filters['max_duration'] ?? null);
+
+        if ($min_duration !== null && $max_duration !== null && $max_duration < $min_duration) {
+            $requested_min = $min_duration;
+            $min_duration = $max_duration;
+            $max_duration = $requested_min;
+        }
+
         if ($min_duration !== null) {
             $where[]  = 'total_ms >= %f';
             $params[] = max(0.0, $min_duration);
         }
 
-        $max_duration = $this->number_or_null($filters['max_duration'] ?? null);
         if ($max_duration !== null) {
             $where[]  = 'total_ms < %f';
             $params[] = max(0.0, $max_duration);
@@ -453,8 +464,9 @@ class Storage
 
         $this->wpdb->query(
             $this->wpdb->prepare(
-                "DELETE FROM {$this->table} WHERE created_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL %d DAY)",
-                $days
+                "DELETE FROM {$this->table} WHERE created_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL %d DAY) LIMIT %d",
+                $days,
+                self::PRUNE_BATCH_LIMIT
             )
         );
     }

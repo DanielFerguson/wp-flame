@@ -39,6 +39,14 @@ class PluginLifecycleTest extends TestCase
         );
     }
 
+    public function test_multisite_lifecycle_queries_all_site_ids_explicitly(): void
+    {
+        $this->assertStringContainsString("function wp_flame_all_site_ids(): array", $this->source);
+        $this->assertStringContainsString("'number' => 0", $this->source);
+        $this->assertStringContainsString('foreach ( wp_flame_all_site_ids() as $blog_id )', $this->source);
+        $this->assertStringNotContainsString("get_sites( [ 'fields' => 'ids' ] )", $this->source);
+    }
+
     public function test_deactivation_skips_mu_plugin_removal_when_directory_is_unavailable(): void
     {
         $this->assertMatchesRegularExpression(

@@ -342,6 +342,50 @@ namespace WPFlame\Tests\Unit {
             $this->assertSame('GET', $trace->spans[0]->meta['method']);
         }
 
+        public function test_malformed_response_status_defaults_to_zero_without_warnings(): void
+        {
+            $collector = Collector::instance();
+            $collector->start_request(microtime(true));
+
+            $http = $this->make_http();
+            $warnings = [];
+
+            set_error_handler(static function (int $errno, string $errstr) use (&$warnings): bool {
+                if ($errno === E_WARNING || $errno === E_NOTICE) {
+                    $warnings[] = $errstr;
+                }
+
+                return true;
+            });
+
+            try {
+                $http->on_pre_request(false, ['method' => 'GET'], 'https://api.example.com/data');
+                $http->on_response(['response' => ['code' => ['bad']]], ['method' => 'GET'], 'https://api.example.com/data');
+            } finally {
+                restore_error_handler();
+            }
+
+            $trace = $collector->get_trace();
+
+            $this->assertSame([], $warnings);
+            $this->assertSame(0, $trace->spans[0]->meta['status']);
+        }
+
+        public function test_response_status_is_clamped_to_valid_http_range(): void
+        {
+            $collector = Collector::instance();
+            $collector->start_request(microtime(true));
+
+            $http = $this->make_http();
+
+            $http->on_pre_request(false, ['method' => 'GET'], 'https://api.example.com/data');
+            $http->on_response(['response' => ['code' => 999]], ['method' => 'GET'], 'https://api.example.com/data');
+
+            $trace = $collector->get_trace();
+
+            $this->assertSame(599, $trace->spans[0]->meta['status']);
+        }
+
         public function test_reentrant_same_url_requests_keep_both_spans(): void
         {
             $collector = Collector::instance();

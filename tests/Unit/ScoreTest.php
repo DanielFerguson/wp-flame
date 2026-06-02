@@ -496,6 +496,19 @@ class ScoreTest extends TestCase
         $this->assertGreaterThanOrEqual(90, $score);
     }
 
+    public function test_calculate_from_basic_treats_non_finite_duration_as_worst_case(): void
+    {
+        $score = Score::calculate_from_basic(NAN, 5);
+
+        $this->assertSame(65, $score);
+    }
+
+    public function test_grade_clamps_out_of_range_scores_to_score_domain(): void
+    {
+        $this->assertSame('F', Score::grade(-500)['grade']);
+        $this->assertSame('A', Score::grade(500)['grade']);
+    }
+
     // ---------------------------------------------------------------------------
     // Slow callback detection: only counts spans with hook meta AND duration > 50ms
     // ---------------------------------------------------------------------------

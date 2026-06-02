@@ -92,6 +92,17 @@ class ListViewTest extends TestCase
         $this->assertArrayNotHasKey('max_duration', $filters);
     }
 
+    public function test_filters_from_request_normalizes_reversed_duration_range(): void
+    {
+        $filters = $this->filters_from_request([
+            'min_duration' => '500',
+            'max_duration' => '50',
+        ]);
+
+        $this->assertSame(50.0, $filters['min_duration']);
+        $this->assertSame(500.0, $filters['max_duration']);
+    }
+
     public function test_filters_from_request_type_overrides_search_filter(): void
     {
         $filters = $this->filters_from_request([
@@ -194,6 +205,39 @@ class ListViewTest extends TestCase
         ]);
 
         $this->assertSame([str_repeat('A', 200) => 15.0], $callbacks);
+    }
+
+    public function test_decode_dashboard_trace_rejects_malformed_and_deep_trace_json(): void
+    {
+        $view = new ListView($this->createMock(Storage::class));
+        $method = new ReflectionMethod(ListView::class, 'decode_dashboard_trace');
+        $method->setAccessible(true);
+
+        $this->assertNull($method->invoke($view, ''));
+        $this->assertNull($method->invoke($view, '{"spans":"bad"}'));
+        $this->assertNull($method->invoke($view, str_repeat('{"nested":', 40) . '[]' . str_repeat('}', 40)));
+    }
+
+    public function test_decode_dashboard_trace_caps_decoded_spans(): void
+    {
+        $view = new ListView($this->createMock(Storage::class));
+        $method = new ReflectionMethod(ListView::class, 'decode_dashboard_trace');
+        $method->setAccessible(true);
+
+        $spans = [];
+        for ($i = 0; $i < 1005; $i++) {
+            $spans[] = [
+                'name'        => 'Span ' . $i,
+                'type'        => 'plugin',
+                'duration_ms' => 1,
+            ];
+        }
+
+        $decoded = $method->invoke($view, json_encode(['spans' => $spans]));
+
+        $this->assertIsArray($decoded);
+        $this->assertCount(1000, $decoded['spans']);
+        $this->assertSame('Span 999', $decoded['spans'][999]['name']);
     }
 
     public function test_trace_row_normalizes_malformed_storage_values_without_warnings(): void

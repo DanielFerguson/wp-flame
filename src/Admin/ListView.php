@@ -24,6 +24,7 @@ class ListView
     private const MAX_USER_LABEL_BYTES = 200;
     private const MAX_ROLE_LABEL_BYTES = 200;
     private const MAX_CALLBACK_LABEL_BYTES = 200;
+    private const MAX_DASHBOARD_SPANS_PER_TRACE = 1000;
 
     /** @var Storage */
     private $storage;
@@ -326,11 +327,18 @@ class ListView
         }
 
         $min_duration = $this->request_float($request, 'min_duration');
+        $max_duration = $this->request_float($request, 'max_duration');
+
+        if ($min_duration !== null && $max_duration !== null && $max_duration < $min_duration) {
+            $requested_min = $min_duration;
+            $min_duration = $max_duration;
+            $max_duration = $requested_min;
+        }
+
         if ($min_duration !== null) {
             $filters['min_duration'] = $min_duration;
         }
 
-        $max_duration = $this->request_float($request, 'max_duration');
         if ($max_duration !== null) {
             $filters['max_duration'] = $max_duration;
         }
@@ -506,13 +514,8 @@ class ListView
         $trace_data_blobs   = $this->storage->get_recent_trace_data();
         $decoded_traces     = [];
         foreach ($trace_data_blobs as $blob) {
-            $blob = Config::string_value($blob, '');
-            if ($blob === '') {
-                continue;
-            }
-
-            $data = json_decode($blob, true);
-            if (is_array($data) && ! empty($data['spans']) && is_array($data['spans'])) {
+            $data = $this->decode_dashboard_trace($blob);
+            if ($data !== null) {
                 $decoded_traces[] = $data;
             }
         }
@@ -994,6 +997,29 @@ class ListView
         arsort($totals);
 
         return array_slice($totals, 0, $limit, true);
+    }
+
+    /**
+     * @param mixed $blob
+     * @return array<string, mixed>|null
+     */
+    private function decode_dashboard_trace($blob): ?array
+    {
+        $blob = Config::string_value($blob, '');
+        if ($blob === '') {
+            return null;
+        }
+
+        $data = json_decode($blob, true, 32);
+        if (! is_array($data) || empty($data['spans']) || ! is_array($data['spans'])) {
+            return null;
+        }
+
+        if (count($data['spans']) > self::MAX_DASHBOARD_SPANS_PER_TRACE) {
+            $data['spans'] = array_slice($data['spans'], 0, self::MAX_DASHBOARD_SPANS_PER_TRACE);
+        }
+
+        return $data;
     }
 
     private function limit_string(string $value, int $max_bytes): string

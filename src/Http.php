@@ -119,7 +119,7 @@ class Http implements Instrumentor
             : 0;
 
         $this->collector->add_span_meta($span_id, [
-            'status' => (int) $status_code,
+            'status' => $this->normalize_status( $status_code ),
         ]);
 
         $this->collector->end_span($span_id);
@@ -175,7 +175,7 @@ class Http implements Instrumentor
                 );
             }
         } else {
-            $meta['status'] = (int) wp_remote_retrieve_response_code( $response );
+            $meta['status'] = $this->normalize_status( wp_remote_retrieve_response_code( $response ) );
         }
 
         $this->collector->add_span_meta( $span_id, $meta );
@@ -219,6 +219,27 @@ class Http implements Instrumentor
     private function request_key( string $url, string $method ): string
     {
         return md5( $url . "\n" . $method );
+    }
+
+    /**
+     * @param mixed $status
+     */
+    private function normalize_status( $status ): int
+    {
+        if ( is_int( $status ) ) {
+            return max( 0, min( 599, $status ) );
+        }
+
+        if ( is_float( $status ) && is_finite( $status ) ) {
+            return max( 0, min( 599, (int) $status ) );
+        }
+
+        if ( is_string( $status ) && is_numeric( trim( $status ) ) ) {
+            $number = (float) trim( $status );
+            return is_finite( $number ) ? max( 0, min( 599, (int) $number ) ) : 0;
+        }
+
+        return 0;
     }
 
     private function limit_string( string $value, int $max_bytes ): string

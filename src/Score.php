@@ -157,6 +157,8 @@ class Score
      */
     public static function grade(int $score): array
     {
+        $score = max( 0, min( 100, $score ) );
+
         if ($score >= self::GRADE_A) {
             return ['grade' => 'A', 'color' => self::COLOR_A];
         }
@@ -195,6 +197,10 @@ class Score
      */
     private static function interpolate(float $value, float $best, float $worst): int
     {
+        if ( ! is_finite( $value ) ) {
+            return 0;
+        }
+
         if ($value <= $best) {
             return 100;
         }

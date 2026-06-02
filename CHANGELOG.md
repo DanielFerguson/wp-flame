@@ -67,6 +67,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Unit tests now guard the CI workflow contract for linting, unit, integration, JavaScript, compatibility-smoke, and package gates
 - WP-CLI output format arguments now fall back to documented formats when malformed or unsupported values are provided
 - Settings storage totals now normalize malformed count and byte values before rendering the purge panel
+- Trace list duration filters now normalize reversed min/max request ranges before querying
+- Callback resolver caches are now capped per request to bound Deep mode memory on large hook tables
+- Dashboard trace summaries now cap decoded spans per trace and reject overly deep legacy JSON blobs
+- Single-trace hydration now rejects overly deep legacy JSON before rebuilding flame graph data without log spam
+- Admin trace view and delete actions now bound incoming trace IDs to the storage trace ID limit
+- Network activation, deactivation, and uninstall now explicitly query all multisite site IDs instead of relying on default site-query limits
+- Release zip builds now remove invalid artifacts immediately if final manifest validation fails
+- Basic fallback scoring now treats non-finite response times as worst-case input instead of allowing unstable score math
+- Score grade helpers now clamp out-of-range inputs to the 0-100 score domain before assigning labels and colors
+- Admin trace view and delete actions now use the same 36-byte trace ID limit as the storage schema
+- Retention pruning now deletes old traces in bounded batches to reduce table-lock risk on large installs
+- HTTP span status metadata now normalizes malformed or out-of-range transport codes before storage
+- Flame graph tooltip handlers now no-op safely if the expected tooltip element is missing from the admin DOM
 
 ### Fixed
 - DB time ratio scoring now caps pathological or legacy aggregate values at 100% instead of displaying impossible percentages

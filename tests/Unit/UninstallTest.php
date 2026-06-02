@@ -23,6 +23,14 @@ class UninstallTest extends TestCase
         );
     }
 
+    public function test_multisite_uninstall_queries_all_site_ids_explicitly(): void
+    {
+        $this->assertStringContainsString('function wp_flame_uninstall_all_site_ids(): array', $this->source);
+        $this->assertStringContainsString("'number' => 0", $this->source);
+        $this->assertStringContainsString('foreach ( wp_flame_uninstall_all_site_ids() as $blog_id )', $this->source);
+        $this->assertStringNotContainsString("get_sites( [ 'fields' => 'ids' ] )", $this->source);
+    }
+
     public function test_mu_plugin_directory_access_is_guarded_on_uninstall(): void
     {
         $this->assertMatchesRegularExpression(

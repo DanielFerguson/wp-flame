@@ -10,6 +10,7 @@ if (! class_exists('\WP_Hook')) {
 
 use PHPUnit\Framework\TestCase;
 use ReflectionMethod;
+use ReflectionProperty;
 use WPFlame\CallbackInstrumentor;
 use WPFlame\CallbackResolver;
 use WPFlame\CallbackWrapper;
@@ -265,5 +266,29 @@ class CallbackInstrumentorTest extends TestCase
 
         $this->assertTrue(CallbackResolver::returns_reference($returns_ref));
         $this->assertFalse(CallbackResolver::returns_reference($normal));
+    }
+
+    public function test_callback_resolver_caches_are_bounded(): void
+    {
+        $collector = Collector::instance();
+        $collector->start_request(1000.0);
+
+        for ($i = 0; $i < 1005; $i++) {
+            $callback_id = 'callback_' . $i;
+
+            $this->assertSame($callback_id, CallbackResolver::resolve_name($callback_id, ['Missing_Class_' . $i, 'method']));
+            $this->assertSame(
+                ['type' => 'php', 'source' => 'unknown'],
+                CallbackResolver::resolve_source($callback_id, ['Missing_Class_' . $i, 'method'], $collector)
+            );
+        }
+
+        $name_cache = new ReflectionProperty(CallbackResolver::class, 'name_cache');
+        $name_cache->setAccessible(true);
+        $source_cache = new ReflectionProperty(CallbackResolver::class, 'source_cache');
+        $source_cache->setAccessible(true);
+
+        $this->assertCount(1000, $name_cache->getValue());
+        $this->assertCount(1000, $source_cache->getValue());
     }
 }

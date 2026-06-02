@@ -228,6 +228,21 @@ namespace WPFlame\Tests\Unit {
             $this->assertSame([20, 0], $wpdb->prepared_params);
         }
 
+        public function test_list_traces_normalizes_reversed_duration_filters(): void
+        {
+            $wpdb = new \wpdb();
+            $storage = new Storage($wpdb);
+
+            $storage->list_traces([
+                'min_duration' => 500,
+                'max_duration' => 50,
+                'per_page'     => 20,
+                'page'         => 1,
+            ]);
+
+            $this->assertSame([50.0, 500.0, 20, 0], $wpdb->prepared_params);
+        }
+
         public function test_count_and_purge_results_are_bounded(): void
         {
             $wpdb = new \WPFlame_TimeBreakdown_WPDB();
@@ -267,7 +282,8 @@ namespace WPFlame\Tests\Unit {
 
             $storage->prune_old(-30);
 
-            $this->assertSame([1], $wpdb->prepared_params);
+            $this->assertSame([1, Storage::PRUNE_BATCH_LIMIT], $wpdb->prepared_params);
+            $this->assertStringContainsString('LIMIT %d', (string) $wpdb->last_query);
         }
 
         public function test_prune_old_caps_days_to_retention_maximum(): void
@@ -277,7 +293,7 @@ namespace WPFlame\Tests\Unit {
 
             $storage->prune_old(Config::MAX_RETENTION_DAYS + 1000);
 
-            $this->assertSame([Config::MAX_RETENTION_DAYS], $wpdb->prepared_params);
+            $this->assertSame([Config::MAX_RETENTION_DAYS, Storage::PRUNE_BATCH_LIMIT], $wpdb->prepared_params);
         }
 
         public function test_aggregate_stats_tolerates_missing_rows(): void
@@ -540,6 +556,21 @@ namespace WPFlame\Tests\Unit {
             $wpdb = new \WPFlame_TimeBreakdown_WPDB();
             $wpdb->row_result = (object) [
                 'trace_data' => str_repeat('{', Config::MAX_MAX_TRACE_BYTES + 1),
+                'user_id'    => 0,
+                'ip_address' => '',
+                'score'      => null,
+                'created_at' => '',
+            ];
+            $storage = new Storage($wpdb);
+
+            $this->assertNull($storage->get_trace('trace-1'));
+        }
+
+        public function test_get_trace_refuses_overly_deep_legacy_trace_json(): void
+        {
+            $wpdb = new \WPFlame_TimeBreakdown_WPDB();
+            $wpdb->row_result = (object) [
+                'trace_data' => str_repeat('{"nested":', 40) . '[]' . str_repeat('}', 40),
                 'user_id'    => 0,
                 'ip_address' => '',
                 'score'      => null,

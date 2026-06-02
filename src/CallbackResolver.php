@@ -10,6 +10,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class CallbackResolver
 {
+    private const MAX_CACHE_ENTRIES = 1000;
+
     /** @var array<string, string> */
     private static array $name_cache = [];
 
@@ -31,7 +33,10 @@ class CallbackResolver
             $name = $callback_id;
         }
 
-        self::$name_cache[$callback_id] = $name;
+        if (count(self::$name_cache) < self::MAX_CACHE_ENTRIES) {
+            self::$name_cache[$callback_id] = $name;
+        }
+
         return $name;
     }
 
@@ -53,7 +58,10 @@ class CallbackResolver
             $source = ['type' => Span::TYPE_PHP, 'source' => 'unknown'];
         }
 
-        self::$source_cache[$callback_id] = $source;
+        if (count(self::$source_cache) < self::MAX_CACHE_ENTRIES) {
+            self::$source_cache[$callback_id] = $source;
+        }
+
         return $source;
     }
 

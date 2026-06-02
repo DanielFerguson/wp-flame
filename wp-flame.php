@@ -37,7 +37,7 @@ add_action( 'wp_initialize_site', 'wp_flame_initialize_new_site', 10, 1 );
 
 function wp_flame_activate( bool $network_wide = false ): void {
     if ( is_multisite() && $network_wide && function_exists( 'get_sites' ) ) {
-        foreach ( get_sites( [ 'fields' => 'ids' ] ) as $blog_id ) {
+        foreach ( wp_flame_all_site_ids() as $blog_id ) {
             switch_to_blog( (int) $blog_id );
             try {
                 wp_flame_activate_site();
@@ -50,6 +50,26 @@ function wp_flame_activate( bool $network_wide = false ): void {
     }
 
     wp_flame_install_mu_plugin();
+}
+
+/**
+ * @return array<int, int>
+ */
+function wp_flame_all_site_ids(): array {
+    if ( ! function_exists( 'get_sites' ) ) {
+        return [];
+    }
+
+    $site_ids = get_sites( [
+        'fields' => 'ids',
+        'number' => 0,
+    ] );
+
+    if ( ! is_array( $site_ids ) ) {
+        return [];
+    }
+
+    return array_map( 'intval', $site_ids );
 }
 
 function wp_flame_activate_site(): void {
@@ -147,7 +167,7 @@ function wp_flame_install_mu_plugin(): void {
 
 function wp_flame_deactivate( bool $network_wide = false ): void {
     if ( is_multisite() && $network_wide && function_exists( 'get_sites' ) ) {
-        foreach ( get_sites( [ 'fields' => 'ids' ] ) as $blog_id ) {
+        foreach ( wp_flame_all_site_ids() as $blog_id ) {
             switch_to_blog( (int) $blog_id );
             try {
                 wp_flame_deactivate_site();
@@ -199,7 +219,7 @@ function wp_flame_has_active_site_plugin( bool $include_network_active, int $exc
         return true;
     }
 
-    foreach ( get_sites( [ 'fields' => 'ids' ] ) as $blog_id ) {
+    foreach ( wp_flame_all_site_ids() as $blog_id ) {
         if ( $exclude_blog_id > 0 && (int) $blog_id === $exclude_blog_id ) {
             continue;
         }
