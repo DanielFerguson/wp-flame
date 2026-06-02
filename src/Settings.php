@@ -564,8 +564,7 @@ class Settings
             wp_die(esc_html__('You do not have permission to access this page.', 'wp-flame'));
         }
 
-        $stats = $this->storage->get_stats();
-        $size_mb = round($stats['bytes'] / 1048576, 2);
+        $stats = $this->storage_summary($this->storage->get_stats());
 
         echo '<div class="wrap">';
         echo '<h1>' . esc_html__('WP Flame Settings', 'wp-flame') . '</h1>';
@@ -583,7 +582,7 @@ class Settings
         echo '<h2 style="margin-top:0;">' . esc_html__('Storage', 'wp-flame') . '</h2>';
         echo '<p>';
         echo '<strong>' . esc_html__('Stored traces:', 'wp-flame') . '</strong> ' . esc_html((string) $stats['count']) . '<br>';
-        echo '<strong>' . esc_html__('Total size:', 'wp-flame') . '</strong> ' . esc_html((string) $size_mb) . ' MB';
+        echo '<strong>' . esc_html__('Total size:', 'wp-flame') . '</strong> ' . esc_html($stats['size_mb']) . ' MB';
         echo '</p>';
 
         echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
@@ -601,5 +600,21 @@ class Settings
         echo '</form>';
 
         echo '</div>';
+    }
+
+    /**
+     * @param mixed $stats
+     * @return array{count: int, size_mb: string}
+     */
+    private function storage_summary($stats): array
+    {
+        $stats = is_array($stats) ? $stats : [];
+        $count = Config::bounded_int($stats['count'] ?? 0, 0, 0, PHP_INT_MAX);
+        $bytes = Config::bounded_int($stats['bytes'] ?? 0, 0, 0, PHP_INT_MAX);
+
+        return [
+            'count'   => $count,
+            'size_mb' => (string) round($bytes / 1048576, 2),
+        ];
     }
 }

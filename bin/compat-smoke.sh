@@ -16,7 +16,7 @@ if [[ ! -f vendor/autoload.php ]]; then
 fi
 
 if [[ ! -x node_modules/.bin/wp-env ]]; then
-    echo "Missing node_modules/.bin/wp-env. Run npm install first." >&2
+    echo "Missing node_modules/.bin/wp-env. Run npm ci first." >&2
     exit 1
 fi
 
@@ -60,6 +60,26 @@ fetch() {
     curl -fsS --max-time 30 "$url" >/dev/null
 }
 
+sql_uint() {
+    local value="$1"
+    if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+        echo "Expected unsigned integer SQL value, got: $value" >&2
+        exit 1
+    fi
+
+    printf '%s' "$value"
+}
+
+sql_like_literal() {
+    local value="$1"
+    value="${value//\\/\\\\}"
+    value="${value//\'/\'\'}"
+    value="${value//%/\\%}"
+    value="${value//_/\\_}"
+
+    printf '%s' "$value"
+}
+
 post_graphql() {
     curl -fsS --max-time 30 \
         -H 'Content-Type: application/json' \
@@ -82,6 +102,7 @@ trace_max_row_id() {
 trace_count_after() {
     local after_id="$1"
     local prefix
+    after_id="$(sql_uint "$after_id")"
     prefix="$(wp_cli db prefix | tr -d '\r')"
     wp_cli db query "SELECT COUNT(*) FROM ${prefix}flame_traces WHERE id > ${after_id}" --skip-column-names | tr -d '[:space:]'
 }
@@ -90,8 +111,10 @@ trace_like_count_after() {
     local after_id="$1"
     local pattern="$2"
     local prefix
+    after_id="$(sql_uint "$after_id")"
+    pattern="$(sql_like_literal "$pattern")"
     prefix="$(wp_cli db prefix | tr -d '\r')"
-    wp_cli db query "SELECT COUNT(*) FROM ${prefix}flame_traces WHERE id > ${after_id} AND trace_data LIKE '%${pattern}%'" --skip-column-names | tr -d '[:space:]'
+    wp_cli db query "SELECT COUNT(*) FROM ${prefix}flame_traces WHERE id > ${after_id} AND trace_data LIKE '%${pattern}%' ESCAPE '\\\\'" --skip-column-names | tr -d '[:space:]'
 }
 
 post_url() {

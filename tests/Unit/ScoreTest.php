@@ -139,6 +139,28 @@ class ScoreTest extends TestCase
         $this->assertSame(100, $db_ratio_factor['score'], 'DB ratio should be auto 100 when total_ms < 100');
     }
 
+    public function test_db_ratio_is_bounded_to_100_percent_for_pathological_trace_data(): void
+    {
+        $spans = [
+            $this->make_span('d1', Span::TYPE_DB, 500.0),
+        ];
+
+        $trace = $this->make_trace(100.0, $spans);
+        $result = Score::calculate($trace);
+
+        $db_ratio_factor = null;
+        foreach ($result['factors'] as $factor) {
+            if ($factor['key'] === 'db_ratio') {
+                $db_ratio_factor = $factor;
+                break;
+            }
+        }
+
+        $this->assertNotNull($db_ratio_factor);
+        $this->assertSame('100%', $db_ratio_factor['value']);
+        $this->assertSame(0, $db_ratio_factor['score']);
+    }
+
     // ---------------------------------------------------------------------------
     // Edge: no HTTP spans → HTTP factor 100
     // ---------------------------------------------------------------------------

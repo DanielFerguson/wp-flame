@@ -239,6 +239,48 @@ class SettingsTest extends TestCase
         $this->assertStringContainsString('<option value="standard"  selected=\'selected\'>', $mode);
     }
 
+    public function test_storage_summary_bounds_malformed_values_without_warnings(): void
+    {
+        $settings = new Settings($this->createMock(Storage::class));
+        $method = new ReflectionMethod(Settings::class, 'storage_summary');
+        $method->setAccessible(true);
+        $warnings = [];
+
+        set_error_handler(static function (int $errno, string $errstr) use (&$warnings): bool {
+            if ($errno === E_WARNING || $errno === E_NOTICE) {
+                $warnings[] = $errstr;
+            }
+
+            return true;
+        });
+
+        try {
+            $summary = $method->invoke($settings, [
+                'count' => ['bad'],
+                'bytes' => '-1024',
+            ]);
+        } finally {
+            restore_error_handler();
+        }
+
+        $this->assertSame([], $warnings);
+        $this->assertSame(['count' => 0, 'size_mb' => '0'], $summary);
+    }
+
+    public function test_storage_summary_formats_bounded_size(): void
+    {
+        $settings = new Settings($this->createMock(Storage::class));
+        $method = new ReflectionMethod(Settings::class, 'storage_summary');
+        $method->setAccessible(true);
+
+        $summary = $method->invoke($settings, [
+            'count' => 12,
+            'bytes' => 1572864,
+        ]);
+
+        $this->assertSame(['count' => 12, 'size_mb' => '1.5'], $summary);
+    }
+
     /**
      * @return array<string, array{0: string, 1: string}>
      */

@@ -464,5 +464,22 @@ namespace WPFlame\Tests\Unit {
             $this->assertStringStartsWith('http_request_failed_', $trace->spans[0]->meta['http_error_code']);
             $this->assertStringStartsWith('Failed for https://api.example.com/private', $trace->spans[0]->meta['http_error']);
         }
+
+        public function test_pending_http_spans_are_capped_if_transports_never_complete(): void
+        {
+            $collector = Collector::instance();
+            $collector->start_request(microtime(true));
+
+            $http = $this->make_http();
+
+            for ($i = 0; $i < 205; $i++) {
+                $http->on_pre_request(false, ['method' => 'GET'], 'https://api.example.com/pending-' . $i);
+            }
+
+            $collector->close_open_spans();
+            $trace = $collector->get_trace();
+
+            $this->assertCount(200, $trace->spans);
+        }
     }
 }

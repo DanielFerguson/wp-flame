@@ -50,7 +50,7 @@ class Redactor
             return '/';
         }
 
-        $path = isset( $parts['path'] ) && $parts['path'] !== '' ? self::limit_bytes( $parts['path'], self::MAX_PATH_BYTES ) : '/';
+        $path = isset( $parts['path'] ) && $parts['path'] !== '' ? self::redact_path( self::limit_bytes( $parts['path'], self::MAX_PATH_BYTES ) ) : '/';
         if ( empty( $parts['query'] ) ) {
             return $truncated ? $path . '?_wp_flame_query_truncated=1' : $path;
         }
@@ -139,6 +139,33 @@ class Redactor
     private static function is_safe_query_value( string $value ): bool
     {
         return (bool) preg_match( '/^[A-Za-z0-9_.:-]{0,80}$/', $value );
+    }
+
+    private static function redact_path( string $path ): string
+    {
+        $segments = explode( '/', $path );
+        foreach ( $segments as $index => $segment ) {
+            if ( $segment === '' ) {
+                continue;
+            }
+
+            $decoded = rawurldecode( $segment );
+            if ( self::is_sensitive_path_segment( $decoded ) ) {
+                $segments[ $index ] = self::REDACTED;
+            }
+        }
+
+        $redacted_path = implode( '/', $segments );
+        return $redacted_path !== '' ? $redacted_path : '/';
+    }
+
+    private static function is_sensitive_path_segment( string $segment ): bool
+    {
+        if ( preg_match( '/^[^@\s\/]+@[^@\s\/]+\.[^@\s\/]+$/', $segment ) ) {
+            return true;
+        }
+
+        return (bool) preg_match( '/^(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9_-]{24,}$/', $segment );
     }
 
     private static function safe_query_key( string $key, int $position ): string

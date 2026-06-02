@@ -61,7 +61,7 @@ class CLI
             return;
         }
 
-        $format = $assoc_args['format'] ?? 'table';
+        $format = $this->format_arg( $assoc_args['format'] ?? 'table', [ 'table', 'json', 'csv' ], 'table' );
 
         $items = array_map([$this, 'format_trace_row'], $traces);
 
@@ -99,7 +99,7 @@ class CLI
             return;
         }
 
-        $format = $assoc_args['format'] ?? 'json';
+        $format = $this->format_arg( $assoc_args['format'] ?? 'json', [ 'json', 'yaml' ], 'json' );
         $data = $trace->toArray();
 
         if ($format === 'json') {
@@ -191,6 +191,17 @@ class CLI
         }
 
         return $fallback;
+    }
+
+    /**
+     * @param mixed        $value
+     * @param array<int,string> $allowed
+     */
+    private function format_arg( $value, array $allowed, string $fallback ): string
+    {
+        $format = strtolower( trim( Config::string_value( $value, $fallback ) ) );
+
+        return in_array( $format, $allowed, true ) ? $format : $fallback;
     }
 
     private function limit_string(string $value, int $max_bytes): string

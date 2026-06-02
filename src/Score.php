@@ -58,7 +58,7 @@ class Score
             $db_ratio_score = 100;
             $db_ratio_value = 0.0;
         } else {
-            $db_ratio_value = $trace->total_query_ms / $trace->total_ms;
+            $db_ratio_value = self::bounded_ratio( $trace->total_query_ms, $trace->total_ms );
             $db_ratio_score = self::interpolate($db_ratio_value, 0.10, 0.60);
         }
 
@@ -261,6 +261,15 @@ class Score
         }
 
         return max( 0.0, min( 1.0, $weight ) );
+    }
+
+    private static function bounded_ratio( float $part, float $total ): float
+    {
+        if ( ! is_finite( $part ) || ! is_finite( $total ) || $total <= 0.0 ) {
+            return 0.0;
+        }
+
+        return max( 0.0, min( 1.0, $part / $total ) );
     }
 
     private static function limit_string( string $value, int $max_bytes ): string

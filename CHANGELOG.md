@@ -48,8 +48,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Force-trace cookie cleanup now uses matched hardened cookie attributes, including `HttpOnly` and `SameSite=Strict`
 - Flame graph rendering now caps pathological parent-chain depth to avoid unbounded recursive rendering
 - Source attribution now guards plugin, mu-plugin, theme, and core directory roots before path matching
+- Compatibility smoke SQL checks now validate dynamic row IDs and escape LIKE probes before querying trace data
+- Unit tests now enforce release version metadata sync across the main plugin, mu-plugin, readme, and changelog
+- Uninstall cleanup now guards malformed or unavailable mu-plugin directory constants before removing early-capture files
+- HTTP instrumentation now caps pending transport spans so unusual response paths cannot grow request memory without bound
+- Default request URL redaction now masks email-like and long token-like path segments, not only query values
+- Insight rule execution now isolates throwing or malformed rules so one recommendation source cannot break the panel
+- Insight engine output is now capped before rendering so extension-heavy rule sets cannot accumulate unbounded recommendations
+- Unit tests now guard the CI workflow contract for linting, unit, integration, JavaScript, compatibility-smoke, and package gates
+- WP-CLI output format arguments now fall back to documented formats when malformed or unsupported values are provided
+- Settings storage totals now normalize malformed count and byte values before rendering the purge panel
 
 ### Fixed
+- DB time ratio scoring now caps pathological or legacy aggregate values at 100% instead of displaying impossible percentages
+- Top user dashboard and filter queries now exclude anonymous `user_id = 0` rows when user tracking is disabled
 - `composer test` no longer fatals when the WordPress integration framework is absent
 - `composer test:integration` now fails loudly when `/tmp/wordpress-tests-lib` is missing
 - The WordPress test installer now rejects partial WordPress/test-suite directories instead of treating them as complete installs

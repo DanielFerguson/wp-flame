@@ -25,6 +25,11 @@ namespace {
             {
                 $GLOBALS['wp_flame_test_cli_messages'][] = ['confirm', $message];
             }
+
+            public static function print_value($data, $args = []): void
+            {
+                $GLOBALS['wp_flame_test_cli_print_value'][] = [$data, $args];
+            }
         }
     }
 }
@@ -48,7 +53,12 @@ namespace WPFlame\Tests\Unit {
     {
         protected function tearDown(): void
         {
-            unset($GLOBALS['wp_flame_test_cli_messages'], $GLOBALS['wp_flame_test_cli_format_items'], $GLOBALS['wp_flame_test_options']);
+            unset(
+                $GLOBALS['wp_flame_test_cli_messages'],
+                $GLOBALS['wp_flame_test_cli_format_items'],
+                $GLOBALS['wp_flame_test_cli_print_value'],
+                $GLOBALS['wp_flame_test_options']
+            );
             Config::reset();
             parent::tearDown();
         }
@@ -171,6 +181,32 @@ namespace WPFlame\Tests\Unit {
             $this->assertSame(64, strlen($row['date']));
         }
 
+        public function test_list_traces_falls_back_for_malformed_format_argument(): void
+        {
+            $storage = $this->getMockBuilder(Storage::class)
+                ->disableOriginalConstructor()
+                ->onlyMethods(['list_traces'])
+                ->getMock();
+
+            $storage->method('list_traces')
+                ->willReturn([
+                    [
+                        'trace_id'    => 'trace-1',
+                        'url'         => '/checkout',
+                        'method'      => 'GET',
+                        'total_ms'    => 12.5,
+                        'query_count' => 1,
+                        'peak_memory' => 1048576,
+                        'created_at'  => '2026-06-02 00:00:00',
+                    ],
+                ]);
+
+            $cli = new CLI($storage);
+            $cli->list_traces([], ['format' => ['bad']]);
+
+            $this->assertSame('table', $GLOBALS['wp_flame_test_cli_format_items'][0][0]);
+        }
+
         public function test_show_requires_trace_id_without_warning(): void
         {
             $storage = $this->getMockBuilder(Storage::class)
@@ -215,6 +251,35 @@ namespace WPFlame\Tests\Unit {
             $cli->show([str_repeat('t', 300)], []);
 
             $this->assertSame([['error', 'Trace not found: ' . str_repeat('t', 128)]], $GLOBALS['wp_flame_test_cli_messages']);
+        }
+
+        public function test_show_falls_back_to_json_for_unsupported_format(): void
+        {
+            $trace = new \WPFlame\Trace(
+                'trace-1',
+                '/checkout',
+                'GET',
+                '2026-06-02T00:00:00+00:00',
+                12.5,
+                1024,
+                '8.3',
+                '6.7',
+                []
+            );
+
+            $storage = $this->getMockBuilder(Storage::class)
+                ->disableOriginalConstructor()
+                ->onlyMethods(['get_trace'])
+                ->getMock();
+
+            $storage->method('get_trace')->willReturn($trace);
+
+            $cli = new CLI($storage);
+            $cli->show(['trace-1'], ['format' => 'table']);
+
+            $this->assertArrayNotHasKey('wp_flame_test_cli_print_value', $GLOBALS);
+            $this->assertSame('log', $GLOBALS['wp_flame_test_cli_messages'][0][0]);
+            $this->assertStringContainsString('"id": "trace-1"', $GLOBALS['wp_flame_test_cli_messages'][0][1]);
         }
 
         public function test_prune_bounds_explicit_days_argument(): void

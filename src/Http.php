@@ -14,6 +14,7 @@ class Http implements Instrumentor
     private const MAX_HOST_BYTES = 255;
     private const MAX_ERROR_CODE_BYTES = 80;
     private const MAX_ERROR_MESSAGE_BYTES = 500;
+    private const MAX_PENDING_SPANS = 200;
 
     /** @var Collector */
     private $collector;
@@ -21,6 +22,7 @@ class Http implements Instrumentor
 
     /** @var array<string, string[]> Maps request key (md5 of url+method) to pending span IDs */
     private array $pending_spans = [];
+    private int $pending_span_count = 0;
 
     public function __construct( bool $full_url = false )
     {
@@ -58,6 +60,10 @@ class Http implements Instrumentor
             return $preempt;
         }
 
+        if ( $this->pending_span_count >= self::MAX_PENDING_SPANS ) {
+            return $preempt;
+        }
+
         $url_string = $this->limit_string( $this->string_value( $url, '' ), self::MAX_URL_BYTES );
         $method = $this->normalize_method( $parsed_args );
         $parsed = parse_url($url_string);
@@ -69,10 +75,14 @@ class Http implements Instrumentor
             $this->get_caller_source(),
             $this->build_request_meta( $url_string, $method, $host )
         );
+        if ( $span_id === '' ) {
+            return $preempt;
+        }
 
         // Key by URL + method to handle concurrent tracking
         $key = $this->request_key( $url_string, $method );
         $this->pending_spans[$key][] = $span_id;
+        $this->pending_span_count++;
 
         return $preempt;
     }
@@ -98,6 +108,7 @@ class Http implements Instrumentor
         }
 
         $span_id = array_pop( $this->pending_spans[ $key ] );
+        $this->pending_span_count = max( 0, $this->pending_span_count - 1 );
         if ( empty( $this->pending_spans[ $key ] ) ) {
             unset( $this->pending_spans[ $key ] );
         }
@@ -142,6 +153,7 @@ class Http implements Instrumentor
         }
 
         $span_id = array_pop( $this->pending_spans[ $key ] );
+        $this->pending_span_count = max( 0, $this->pending_span_count - 1 );
         if ( empty( $this->pending_spans[ $key ] ) ) {
             unset( $this->pending_spans[ $key ] );
         }

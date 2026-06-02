@@ -605,6 +605,28 @@ namespace WPFlame\Tests\Unit {
             ], $breakdown);
         }
 
+        public function test_top_users_excludes_anonymous_user_rows(): void
+        {
+            $wpdb = new \wpdb();
+            $storage = new Storage($wpdb);
+
+            $storage->get_top_users(999, Config::MAX_RETENTION_DAYS + 1000);
+
+            $this->assertStringContainsString('AND user_id > 0', (string) $wpdb->last_query);
+            $this->assertSame([Config::MAX_RETENTION_DAYS, 50], $wpdb->prepared_params);
+        }
+
+        public function test_distinct_user_filter_options_exclude_anonymous_user_rows(): void
+        {
+            $wpdb = new \wpdb();
+            $storage = new Storage($wpdb);
+
+            $storage->get_distinct_users(Config::MAX_RETENTION_DAYS + 1000);
+
+            $this->assertStringContainsString('AND user_id > 0', (string) $wpdb->last_query);
+            $this->assertSame([Config::MAX_RETENTION_DAYS], $wpdb->prepared_params);
+        }
+
         public function test_save_trace_clamps_zero_trace_size_setting_to_bounded_minimum(): void
         {
             Config::instance()->set_override('wp_flame_max_trace_bytes', 0);

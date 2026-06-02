@@ -18,6 +18,33 @@ class RedactorTest extends TestCase
         $this->assertSame('/checkout/order-received/123?key=[redacted]&token=[redacted]&page=2', $redacted);
     }
 
+    public function test_request_uri_redacts_sensitive_path_segments(): void
+    {
+        $uri = '/account/customer@example.com/download/a1b2c3d4e5f6g7h8i9j0k1l2?file=invoice';
+
+        $redacted = Redactor::redact_request_uri($uri);
+
+        $this->assertSame('/account/[redacted]/download/[redacted]?file=[redacted]', $redacted);
+    }
+
+    public function test_request_uri_redacts_encoded_email_path_segments(): void
+    {
+        $uri = '/profile/customer%40example.com/orders';
+
+        $redacted = Redactor::redact_request_uri($uri);
+
+        $this->assertSame('/profile/[redacted]/orders', $redacted);
+    }
+
+    public function test_request_uri_preserves_ordinary_route_segments(): void
+    {
+        $uri = '/checkout/order-received/123?paged=2';
+
+        $redacted = Redactor::redact_request_uri($uri);
+
+        $this->assertSame('/checkout/order-received/123?paged=2', $redacted);
+    }
+
     public function test_request_uri_redacts_arrays(): void
     {
         $uri = '/shop?filter[email]=customer@example.com&filter[page]=2';

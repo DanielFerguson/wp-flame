@@ -608,7 +608,7 @@ class Storage
         $results = $this->wpdb->get_results($this->wpdb->prepare(
             "SELECT user_id, COUNT(*) as request_count, AVG(total_ms) as avg_ms, SUM(total_ms) as total_ms
              FROM `{$this->table}`
-             WHERE created_at >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL %d DAY)
+             WHERE created_at >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL %d DAY) AND user_id > 0
              GROUP BY user_id
              ORDER BY total_ms DESC
              LIMIT %d",
@@ -651,7 +651,7 @@ class Storage
         $results = $this->wpdb->get_results($this->wpdb->prepare(
             "SELECT user_id, COUNT(*) as request_count
              FROM `{$this->table}`
-             WHERE created_at >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL %d DAY)
+             WHERE created_at >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL %d DAY) AND user_id > 0
              GROUP BY user_id
              ORDER BY request_count DESC
              LIMIT 50",

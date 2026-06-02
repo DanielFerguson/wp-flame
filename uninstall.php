@@ -13,6 +13,12 @@ if ( ! defined( 'WP_UNINSTALL_PLUGIN' ) ) {
 
 global $wpdb;
 
+function wp_flame_uninstall_mu_plugin_dir(): string {
+    return defined( 'WPMU_PLUGIN_DIR' ) && is_string( WPMU_PLUGIN_DIR ) && WPMU_PLUGIN_DIR !== ''
+        ? WPMU_PLUGIN_DIR
+        : '';
+}
+
 function wp_flame_uninstall_site(): void {
     global $wpdb;
 
@@ -59,8 +65,9 @@ if ( is_multisite() && function_exists( 'get_sites' ) ) {
 }
 
 // Remove the early-capture mu-plugin when the directory is available.
-if ( defined( 'WPMU_PLUGIN_DIR' ) ) {
-    $mu_file = WPMU_PLUGIN_DIR . '/wp-flame-early-hooks.php';
+$mu_dir = wp_flame_uninstall_mu_plugin_dir();
+if ( $mu_dir !== '' ) {
+    $mu_file = $mu_dir . '/wp-flame-early-hooks.php';
     if ( file_exists( $mu_file ) ) {
         if ( function_exists( 'wp_delete_file' ) ) {
             wp_delete_file( $mu_file );
