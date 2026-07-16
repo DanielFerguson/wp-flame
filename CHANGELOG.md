@@ -6,7 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [1.3.0-rc.1] - 2026-07-16
+
 ### Added
+- Request-type-aware lifecycle maps and bounded route identities for frontend, admin, REST, AJAX, WooCommerce AJAX, cron, CLI, and GraphQL requests
+- One-shot and bounded-expiry Deep diagnostics with explicit callback compatibility exclusions
+- Live compatibility assertions for named WPGraphQL operations and root resolvers across Safe, Standard, and Deep modes
+- Distinct source attribution for plugins, mu-plugins, child/parent themes, supported drop-ins, WordPress core, and unknown sources
+- An accepted database-capture architecture decision recording the core-`wpdb` strategy, start boundary, and unsupported custom-layer behavior
+- Versioned trace-schema v2 capture reports covering mode, capabilities, sampling, completeness, truncation, capture origin, and observed timing
+- Indexed trace cohort dimensions plus bounded capture-session and deduplicated environment-snapshot storage
+- Explicit trace-persistence results so callers can distinguish successful inserts from encoding, size, and database failures
 - Privacy redaction for stored request URLs and normalized SQL fingerprints by default
 - Instrumentation modes: Safe, Standard, and Deep for compatibility-sensitive sites
 - Span count and trace JSON size limits to bound runtime memory and storage use
@@ -14,8 +24,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - CI workflow covering PHP unit tests, WordPress integration tests, and package builds
 - Privacy toggles for logged-in user IDs and browser user-agent strings
 - `composer lint` PHP syntax check for production and test files
+- Per-site storage row/byte quotas, bounded resumable retention, migration health, and multisite maintenance jobs
+- Owned atomic mu-plugin installation and exact-content removal safeguards
+- WordPress privacy-policy text, full bounded personal-data export, resumable erasure, and a published local data inventory
+- Versioned daily route, capability, source/type, and callback rollups with transactional resumable backfill and WP-CLI health controls
+- Capability-aware Score v2 snapshots, evidence-rich performance findings, and compatible route-cohort p50/p95 histogram trends
+- Guided, request-population-pinned Standard and one-shot Deep capture sessions with bounded progress, exact stored-trace links, cancellation, and expiry
+- Compatible baseline/after comparison with directional and verified sample thresholds, distribution and capability evidence, environment warnings, and redacted local JSON export
+- Keyboard-accessible span inspection with source/type search, inclusive and self time, ownership/version context, bounded caller data, and type-specific evidence
 
 ### Changed
+- Customer traces now exclude WP Flame admin, persistence, pruning, migration, and maintenance work, while persistence and environment discovery run after collection stops
+- Object-cache advice now uses WordPress's external-cache signal and treats unavailable backend counters as unknown
+- Callback source metadata is resolved lazily in Deep mode, and Safe/Standard do not mutate WordPress callback tables
+- WPGraphQL instrumentation registers against current operation/resolver hooks without relying on an early request constant and supports stacked operations
+- Span closing is now ID-aware, and dropped, trimmed, auto-closed, degraded, and close-mismatch states are carried into the visible capture report
+- SQL, HTTP, and GraphQL metadata now retain their documented key-specific bounds through persistence instead of sharing a smaller generic limit
+- The WordPress test installer now selects a single latest release when the version API returns multiple offers
+- Established CI-enforced WPCS, PHPStan, and unit-coverage baselines so quality debt cannot grow unnoticed.
+- Public product copy and wp-admin timing labels now distinguish observed WordPress execution from full request, browser, or arbitrary PHP profiling
+- Community and Pro now have a provisional architecture contract that keeps trace accuracy, capability disclosure, scoring truth, and essential findings in the shared measurement core
 - User ID, IP address, and user-agent tracking now default to disabled for new installs
 - Callback wrapping is limited to Deep mode instead of running by default
 - Release zip builds now happen in a temporary directory and verify version metadata before packaging
@@ -28,6 +56,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Public documentation now describes bounded overhead and current custom-table/vanilla-JS architecture without fixed overhead claims
 - Sample rate, retention, span count, and trace JSON settings are now clamped to bounded operational ranges in both settings and runtime paths
 - Stored request URL redaction now also renames unsafe query parameter keys, not only query values
+- Stored request URL redaction now caps nested query array depth before rebuilding safe query strings
 - The mu-plugin now skips anonymous requests before autoloading when the selected audience requires logged-in/admin users and no cookie/auth signal is present
 - HTTP span metadata now bounds captured URL and host strings before storing them in trace data
 - HTTP instrumentation hooks now register at the practical last WordPress priority to reduce open spans when plugins short-circuit requests late
@@ -40,6 +69,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Release zip builder now validates the final zip manifest for dev-only files and directories
 - Compatibility smoke tests now run against the latest production WordPress release while the integration matrix retains WordPress 6.0 lower-bound coverage
 - Full SQL and GraphQL text opt-ins now still bound captured query payload sizes before trace storage
+- GraphQL endpoint detection now bounds custom endpoint filter values and request paths before heuristic matching
 - Score factor extension output now bounds display labels, values, keys, and weights before rendering
 - The early mu-plugin now rejects unsafe stored plugin basenames before building the main plugin autoload path
 - Flame graph rendering now handles malformed span IDs, cyclic parent references, and oversized span lists defensively
@@ -49,15 +79,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - WP-CLI trace commands now bound displayed row fields and handle missing or oversized trace IDs defensively
 - Stored trace payloads now normalize top-level fields and trace metadata before JSON encoding so extension metadata cannot bloat persistence
 - Dashboard abuse insights now bound IP, endpoint, and user labels before grouping or rendering recommendations
+- Early HTTP insight rendering now bounds legacy URL and host metadata before admin output
 - Shutdown auto-closing now respects the configured completed-span cap and reports dropped overflow spans
 - Source attribution caching is now capped per request to bound memory on large plugin stacks
 - Legacy trace hydration now bounds stored query count and total query time aggregates
 - Stored numeric columns and span rows now clamp pathological timing, memory, source, and metadata values before persistence
 - Live trace and span construction now applies the same field, metadata, and span-count bounds as legacy trace hydration
 - Force-trace cookie cleanup now uses matched hardened cookie attributes, including `HttpOnly` and `SameSite=Strict`
+- Force-trace cookie validation and cleanup headers now bound nonce, path, and domain sizes, and clear both host-only and domain-scoped cookies on configured domains
 - Flame graph rendering now caps pathological parent-chain depth to avoid unbounded recursive rendering
 - Source attribution now guards plugin, mu-plugin, theme, and core directory roots before path matching
+- Source attribution now treats empty directory roots as unavailable instead of matching every absolute path
+- Source attribution now bounds caller-provided backtrace skip and depth values
 - Compatibility smoke SQL checks now validate dynamic row IDs and escape LIKE probes before querying trace data
+- Compatibility smoke SQL checks now validate numeric query results before Bash comparisons
 - Unit tests now enforce release version metadata sync across the main plugin, mu-plugin, readme, and changelog
 - Uninstall cleanup now guards malformed or unavailable mu-plugin directory constants before removing early-capture files
 - HTTP instrumentation now caps pending transport spans so unusual response paths cannot grow request memory without bound
@@ -70,18 +105,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Trace list duration filters now normalize reversed min/max request ranges before querying
 - Callback resolver caches are now capped per request to bound Deep mode memory on large hook tables
 - Dashboard trace summaries now cap decoded spans per trace and reject overly deep legacy JSON blobs
+- Dashboard pagination-abuse detection now caps query parameter parsing per trace row
 - Single-trace hydration now rejects overly deep legacy JSON before rebuilding flame graph data without log spam
 - Admin trace view and delete actions now bound incoming trace IDs to the storage trace ID limit
+- Settings purge nonce handling now uses a contextual nonce-size bound instead of the generic request-string limit
 - Network activation, deactivation, and uninstall now explicitly query all multisite site IDs instead of relying on default site-query limits
 - Release zip builds now remove invalid artifacts immediately if final manifest validation fails
 - Basic fallback scoring now treats non-finite response times as worst-case input instead of allowing unstable score math
 - Score grade helpers now clamp out-of-range inputs to the 0-100 score domain before assigning labels and colors
 - Admin trace view and delete actions now use the same 36-byte trace ID limit as the storage schema
 - Retention pruning now deletes old traces in bounded batches to reduce table-lock risk on large installs
+- WP-CLI pruning now reports the bounded delete count and warns when another batch may be needed
 - HTTP span status metadata now normalizes malformed or out-of-range transport codes before storage
 - Flame graph tooltip handlers now no-op safely if the expected tooltip element is missing from the admin DOM
+- New installations default to manual-only capture; automatic sampled tracing requires an explicit opt-in
+- Privacy-sensitive capture options require one shared acknowledgement at both settings-save and runtime boundaries
+- Dashboard source/type and callback summaries now use versioned rollups and disclose their population, cohort count, algorithm version, and pending samples
+- Missing Score v2 capabilities now remain unknown with zero applied weight; observed factor weights renormalize without inventing excellent results
+- Trace findings now disclose evidence, measured impact, ownership/version where known, confidence, required capability, next action, and verification guidance
+- The detail view ranks up to five plain-language opportunities above the technical timeline and explains when no supported threshold fired
 
 ### Fixed
+- Upgrades atomically adopt only exact-hash known pre-ownership WP Flame early loaders; unknown or modified mu-plugin collisions remain untouched and visibly degraded
+- Application-package rollback no longer fatals when the newer early loader is briefly paired with an older package that predates the versioned Lifecycle helper
+- Guided sessions now stay inside the selected request population so incidental browser REST/AJAX traffic cannot claim a frontend or admin workflow capture
+- Instrumented admin requests now construct storage/admin services around the effective database wrapper, avoiding shared-result invalidation between two `wpdb` objects
+- The database wrapper now preserves runtime public properties added to the core `wpdb` instance by plugins such as WooCommerce
+- Database, HTTP, and GraphQL instrumentors stop trace-processing work immediately after collection stops
+- Frontend lifecycle capture now places the real main-query transition before `wp` instead of hiding it inside a later generic phase
 - DB time ratio scoring now caps pathological or legacy aggregate values at 100% instead of displaying impossible percentages
 - Top user dashboard and filter queries now exclude anonymous `user_id = 0` rows when user tracking is disabled
 - `composer test` no longer fatals when the WordPress integration framework is absent

@@ -2,88 +2,95 @@
 Contributors: chepstowe
 Tags: performance, profiling, flame graph, APM, debugging
 Requires at least: 6.0
-Tested up to: 6.7
+Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 1.2.0
+Stable tag: 1.3.0-rc.1
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-See exactly where your WordPress request spends its time. Interactive flame graph APM.
+Inspect observed WordPress request time with local, bounded flame-style traces.
 
 == Description ==
 
-WP Flame is a self-hosted, zero-dependency APM (Application Performance Monitoring) plugin for WordPress. It instruments the full request lifecycle and renders an interactive flame graph in your admin panel.
+WP Flame is a self-hosted performance monitoring plugin for WordPress. It records supported server-side spans from the earliest WP Flame capture point available and renders them as an interactive flame-style timeline in wp-admin.
 
 **What it shows you:**
 
-* **Lifecycle phases** - Bootstrap, Plugin Load, Theme Setup, Init, Routing, Main Query, Render
-* **Per-callback timing** - Optional Deep mode shows which plugin/theme callbacks are slow within each hook
-* **Database queries** - SQL fingerprints with duration, caller, and source attribution; full query text is opt-in
-* **External HTTP calls** - API calls, license checks, webhook sends with host, method, status, and duration; full URLs are opt-in
-* **Actionable insights** - Auto-generated recommendations like "WooCommerce license check is blocking page load"
+* **Observed lifecycle spans** - Intervals captured from the earliest WP Flame bootstrap point available
+* **Supported callback timing** - Optional Deep mode shows observed WordPress hook callbacks that can be wrapped safely
+* **Compatible database queries** - SQL fingerprints and durations when the active database layer can be instrumented
+* **WordPress HTTP API calls** - Host, method, status, and duration for supported requests; full URLs are opt-in
+* **Performance findings** - Rule-based guidance derived from the spans and capabilities that were actually observed
 
 **Key features:**
 
 * Interactive SVG flame graph with click-to-zoom and hover tooltips
 * Compatibility-focused instrumentation modes: Safe, Standard, and Deep
-* Optional per-callback instrumentation showing individual plugin/theme function timing
+* Optional Deep instrumentation for supported WordPress hook callbacks
 * Color-coded spans: Core (grey), Plugins (purple), Theme (green), Database (red), HTTP (amber)
-* Time axis with ms labels and "Full request" overview bar
+* Time axis with ms labels and an observed-request overview bar
 * Insights panel with automatic performance analysis rules
 * Settings page with sampling rate, audience control, and data retention
 * "Trace This Page" admin bar button for on-demand single-page tracing
 * Trace list with URL filtering, duration filtering, and pagination
-* Dashboard with aggregate stats, slowest pages, slowest callbacks, and response time histogram
+* Dashboard with aggregate stats, slowest request paths, slowest callbacks, and observed-duration histogram
 * Performance budgets — admin notice when requests exceed configured ms/query thresholds
 * WP-CLI commands: `wp flame list`, `wp flame show`, `wp flame prune`
 * Privacy-safe defaults: redacted request URLs, normalized SQL fingerprints, host-only HTTP metadata, and identity fields (user IDs, IPs, user agents) disabled by default
-* Object cache hit/miss stats per trace (compatible with Redis, Memcached, and default WP cache)
+* Object-cache hit/miss stats when the active cache implementation exposes compatible public counters
 
 **How it works:**
 
 WP Flame uses a must-use plugin (mu-plugin) to start timing before other plugins load. Depending on the selected compatibility mode, it records lifecycle spans, hooks into the HTTP API, captures safe database spans, and can optionally wrap WordPress hook callbacks during focused debugging. At shutdown, the trace is saved to a custom database table. The admin UI renders the data as an interactive flame graph.
 
-**Zero dependencies. No SaaS. No PHP extensions. Just install and activate.**
+**No runtime Composer packages, required SaaS service, or PHP profiling extension.**
 
 == Installation ==
 
 1. Upload the `wp-flame` folder to `/wp-content/plugins/`
 2. Activate the plugin through the Plugins menu
-3. The plugin automatically installs a mu-plugin for early loading
+3. The plugin attempts to install a mu-plugin for earlier capture
 4. Browse your site as an admin
 5. Go to Tools > WP Flame to see your flame graphs
 
-**Note:** The mu-plugin (`wp-flame-early-hooks.php`) is automatically copied to `wp-content/mu-plugins/` on activation. This enables the plugin to capture timing data before other plugins load. It is automatically removed on deactivation.
+**Note:** WP Flame attempts to copy `wp-flame-early-hooks.php` to `wp-content/mu-plugins/` on activation so capture can begin before normal plugins load. It attempts to remove that managed copy on deactivation.
 
-If the mu-plugin cannot be installed (e.g., on managed hosting with restricted mu-plugins), WP Flame runs in limited mode — plugin load timing is unavailable but all other features work normally.
+If the mu-plugin cannot be installed, WP Flame runs in degraded mode. Early intervals are unavailable, request-specific phase detail may be reduced, and the resulting trace must be treated as partial.
 
 == Frequently Asked Questions ==
 
 = Does this slow down my site? =
 
-WP Flame is designed to keep overhead bounded, but the exact cost depends on instrumentation mode, plugin stack, and request complexity. Use Safe or Standard mode with sampling for production monitoring, and reserve Deep mode for focused debugging. Callbacks below a configurable threshold (default 0.5ms) are automatically discarded.
+WP Flame uses sampling, span limits, and trace-size limits to bound work, but its exact cost depends on mode, plugin stack, and request complexity. Start with Safe mode and admin-only sampling, measure the effect in your environment, and reserve Deep mode for focused debugging. Discarding short callback spans reduces stored data but does not remove callback-wrapper invocation cost. Public v1 overhead budgets remain gated on published benchmarks.
 
 = What is the mu-plugin and why is it needed? =
 
-The mu-plugin (`wp-flame-early-hooks.php`) loads before all other plugins, allowing WP Flame to measure plugin initialization time. Without it, WP Flame still works but cannot capture Bootstrap and Plugin Load phase timing. The mu-plugin is automatically installed on activation and removed on deactivation.
+The mu-plugin (`wp-flame-early-hooks.php`) loads before normal plugins, allowing WP Flame to observe more of plugin initialization. Without it, later supported instrumentation can still run, but the trace begins later and is partial.
 
 = Can I use this on a production site? =
 
-Yes, with the appropriate settings. Set the sampling rate to trace 1 in every 10 (or 100) requests, and limit tracing to admin users only. Use the data retention setting to automatically clean up old traces. User IDs, IP addresses, user-agent strings, full SQL text, full HTTP URLs, and full GraphQL query text are disabled by default and can be enabled only when your site policy allows it. When IP tracking is enabled, WP Flame uses `REMOTE_ADDR` by default; trusted proxy headers can be enabled with the `wp_flame_client_ip_headers` filter.
+WP Flame is designed for bounded capture, but production use must be validated on the target stack. Start with Safe mode, admin-only eligibility, and a conservative sample rate. Monitor storage and reserve Deep mode for short diagnostic sessions. User IDs, IP addresses, user-agent strings, full SQL text, full HTTP URLs, and full GraphQL query text are disabled by default and should be enabled only when the site's purpose, notice, retention, export, and erasure policies support them.
 
 = Does it work with page caching? =
 
-Cached pages that are served without executing PHP will not generate traces. This is expected — cached pages don't need profiling. WP Flame only traces requests that actually run through WordPress.
+Cached responses served without executing PHP do not generate traces. WP Flame observes only requests that actually run through WordPress.
 
 = How is this different from Query Monitor? =
 
-Query Monitor shows tabular data for a single request. WP Flame shows an interactive flame graph with time-based visualization, per-callback granularity, and historical trace storage. They complement each other well.
+Query Monitor is an excellent current-request developer debugger. WP Flame focuses on bounded local history, a flame-style request timeline, supported callback detail, and a guided diagnosis/verification direction. They can complement each other.
 
 = How is this different from New Relic or Datadog? =
 
-Those require SaaS subscriptions and PHP extensions. WP Flame is free, self-hosted, requires no server configuration, and uses WordPress-native concepts (plugins, themes, hooks) instead of generic PHP function profiling.
+Server APM products can provide deeper PHP and infrastructure visibility and may require a hosting integration or PHP extension. WP Flame is self-hosted by default, requires no profiling extension, and presents supported data using WordPress-native concepts. It is not a replacement for complete server observability.
 
 == Changelog ==
+
+= 1.3.0-rc.1 =
+* Adds versioned capture completeness, capability, request-population, environment, and scoring evidence.
+* Adds guided Standard and one-shot Deep capture, evidence-rich findings, safe span inspection, and compatible before/after comparison.
+* Adds bounded storage quotas, resumable retention/migrations, aggregate rollups, and safer multisite maintenance.
+* Strengthens attribution, lifecycle handling, privacy redaction, mu-plugin ownership, failure isolation, release checks, and compatibility coverage.
+* Adds a redacted-by-default WP-CLI support bundle and release-candidate operating documentation.
 
 = 1.2.0 =
 * Compatibility-focused Safe, Standard, and Deep instrumentation modes
@@ -127,6 +134,9 @@ Those require SaaS subscriptions and PHP extensions. WP Flame is free, self-host
 * mu-plugin for early loading with graceful degraded mode
 
 == Upgrade Notice ==
+
+= 1.3.0-rc.1 =
+Release candidate for paid design-partner validation. Verify backups and compatibility on the target stack, begin in Safe mode, and review the new capture-health, privacy, quota, and retention controls before production use.
 
 = 1.2.0 =
 Privacy defaults are stricter and instrumentation modes are compatibility-focused. Review settings after upgrading if you previously relied on full identity, SQL, HTTP URL, or GraphQL query capture.

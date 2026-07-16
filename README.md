@@ -6,12 +6,12 @@ It targets PHP 7.4+ and WordPress 6.0+, has no production Composer package depen
 
 ## What It Captures
 
-- WordPress lifecycle phases such as Bootstrap, Plugin Load, Theme Setup, Routing, Main Query, Render, REST, AJAX, CLI, and cron.
+- Observed WordPress lifecycle spans from the earliest WP Flame capture point available for frontend, admin, REST, AJAX, CLI, and cron requests.
 - Database spans in Standard and Deep modes when the active `$wpdb` is the core WordPress class.
-- WPGraphQL operation, resolver, and DB spans when WPGraphQL hooks are available.
-- External HTTP spans with host, method, status, duration, and source attribution.
-- Optional Deep-mode callback spans for WordPress hooks.
-- Object-cache hit/miss summary from public cache drop-in counters.
+- WPGraphQL operation and root-resolver spans when the supported current hooks fire, plus DB spans outside Safe mode. The compatibility gate currently covers WPGraphQL 2.17; unsupported hook variants are reported as unavailable rather than inferred as healthy.
+- WordPress HTTP API spans with host, method, status, duration, and best-effort source attribution.
+- Optional Deep-mode spans for supported WordPress hook callbacks.
+- Object-cache hit/miss summaries when the active cache implementation exposes compatible public counters.
 - Aggregate dashboard data such as slowest pages, slowest callbacks, response-time distribution, top users, and top IPs when those privacy options are enabled.
 
 ## Compatibility Modes
@@ -20,9 +20,9 @@ WP Flame has three instrumentation modes:
 
 - **Safe:** lifecycle and external HTTP spans only. Use this first on compatibility-sensitive production sites.
 - **Standard:** Safe mode plus database spans where `$wpdb` can be safely replaced. This is the default.
-- **Deep:** Standard mode plus callback wrapping for focused debugging. Deep mode skips by-reference callbacks, return-by-reference callbacks, non-callables, GraphQL callback wrapping, and known self-instrumentation paths.
+- **Deep:** Standard mode plus callback wrapping for focused debugging. Deep is available as a one-shot forced trace or a bounded override of at most 15 minutes; it is not a permanent saved mode. It skips by-reference callbacks, return-by-reference callbacks, non-callables, GraphQL callback wrapping, and known self-instrumentation paths.
 
-For major plugin stacks such as WooCommerce, Elementor, bbPress, WPGraphQL, custom DB drop-ins, and managed hosts, start with Safe or Standard mode and use sampling. Deep mode is intended for short debugging sessions, not always-on production monitoring.
+For major plugin stacks such as WooCommerce, Elementor, bbPress, WPGraphQL, custom DB drop-ins, and managed hosts, start with Safe or Standard mode and use sampling. Deep automatically returns to the configured Standard/Safe behavior after its one request or expiry.
 
 ## Privacy Defaults
 
@@ -45,7 +45,7 @@ Settings can opt into full SQL text, full HTTP URLs, full GraphQL query text, us
 4. Browse the site as an admin or use the admin-bar "Trace This Page" button.
 5. View traces under Tools > WP Flame.
 
-If the mu-plugin cannot be copied, WP Flame runs in degraded mode. It cannot capture the earliest Bootstrap/Plugin Load timing, but normal admin, settings, storage, privacy, and later instrumentation behavior still works.
+If the mu-plugin cannot be copied, WP Flame runs in degraded mode. It cannot capture the earliest observed intervals, and request-specific phase detail may be reduced. Admin, settings, storage, privacy, and supported later instrumentation remain available, but the resulting trace must be treated as partial.
 
 ## Project Structure
 
@@ -91,11 +91,23 @@ Run PHP syntax checks:
 composer lint
 ```
 
+Run the committed coding-standard and static-analysis baselines:
+
+```bash
+composer standards
+composer analyse
+```
+
 Run unit tests only:
 
 ```bash
 composer test:unit
+composer test:coverage
 ```
+
+The standards, static-analysis, and coverage commands enforce committed
+baselines. Baselines may decrease as debt is fixed; regenerate them only after
+an intentional review, never simply to make a regression pass.
 
 Install the WordPress integration test framework:
 
@@ -116,6 +128,17 @@ npm ci
 npm run compat:smoke
 ```
 
+## Operator and release documentation
+
+- [Quickstart](docs/QUICKSTART.md)
+- [Capture modes and measured overhead](docs/MODE-AND-OVERHEAD.md)
+- [Compatibility and known limitations](docs/compatibility/MATRIX.md)
+- [Privacy and local data handling](docs/PRIVACY.md)
+- [Support scope](docs/SUPPORT.md)
+- [Update and license behavior](docs/UPDATE-AND-LICENSE-POLICY.md)
+- [Paid RC distribution decision](docs/architecture/RC-DISTRIBUTION.md)
+- [Responsible disclosure](SECURITY.md)
+
 ## Release Build
 
 Build a release zip:
@@ -131,12 +154,22 @@ The build script:
 - Builds in a temporary directory.
 - Installs an optimized production Composer autoloader.
 - Removes dev-only paths such as tests, CI, npm files, Composer metadata, and build scripts from the zip.
+- Normalizes file timestamps and archive ordering for byte-identical repeated builds.
+- Includes the standalone GPLv2 license.
+
+A public artifact must come from a clean commit tagged `v<version>`:
+
+```bash
+bin/release-package.sh [version]
+```
+
+That command builds twice, refuses non-identical output, and writes the immutable ZIP, SHA-256 file, and provenance JSON under `dist/<version>/`.
 
 ## Operational Notes
 
 - Use sampling for production monitoring. The default audience is admins only.
 - The mu-plugin has early gates for disabled tracing, sampling misses, and anonymous requests when the audience requires logged-in/admin users.
-- Stored traces are automatically pruned according to the retention setting.
+- Scheduled cleanup removes expired traces in bounded resumable batches. Per-site row and encoded-byte quotas pause capture before storage can grow without bound.
 - Span count and trace JSON size limits protect memory and storage on large WooCommerce, Elementor, REST, GraphQL, and admin requests.
 - Uninstall removes plugin tables, options, transients, cron hooks, and the copied mu-plugin across multisite installs.
 
