@@ -34,6 +34,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Keyboard-accessible span inspection with source/type search, inclusive and self time, ownership/version context, bounded caller data, and type-specific evidence
 
 ### Changed
+- Removed unresolved legacy Plugin/Author URI metadata and made a verified private disclosure route an explicit production-distribution prerequisite
 - Customer traces now exclude WP Flame admin, persistence, pruning, migration, and maintenance work, while persistence and environment discovery run after collection stops
 - Object-cache advice now uses WordPress's external-cache signal and treats unavailable backend counters as unknown
 - Callback source metadata is resolved lazily in Deep mode, and Safe/Standard do not mutate WordPress callback tables

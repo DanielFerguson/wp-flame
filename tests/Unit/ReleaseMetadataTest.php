@@ -153,6 +153,23 @@ class ReleaseMetadataTest extends TestCase
         $this->assertStringContainsString('"LICENSE"', $script);
     }
 
+    public function test_release_package_does_not_publish_the_unverified_legacy_contact_url(): void
+    {
+        $plugin = $this->file('wp-flame.php');
+        $security = $this->file('SECURITY.md');
+
+        $this->assertStringNotContainsString('chepstowe.consulting', $plugin);
+        $this->assertStringNotContainsString('chepstowe.consulting', $security);
+        $this->assertStringContainsString(
+            'must be published alongside the official release notes before any production distribution',
+            $security
+        );
+        $this->assertStringContainsString(
+            'submitted only through that published private route',
+            $security
+        );
+    }
+
     public function test_release_package_contains_every_linked_operator_document(): void
     {
         $readme = $this->file('README.md');

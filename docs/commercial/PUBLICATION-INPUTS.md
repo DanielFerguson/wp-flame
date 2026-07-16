@@ -52,6 +52,8 @@ The first transactions may use a manual invoice or hosted checkout. Do not embed
 | Release notes/checksum/provenance | Pending | Pending |
 | Responsible disclosure for WP Flame itself | Pending | Pending |
 
+The legacy `https://www.chepstowe.consulting` Plugin/Author URI did not resolve during the 2026-07-16 release audit and public search did not establish a verified replacement. The optional dead metadata links were removed from the candidate. Do not restore them or publish a disclosure/support link until the owner has verified the destination and its private-contact workflow.
+
 Website copy must not describe automatic optimization, browser/Core Web Vitals monitoring, complete PHP profiling, complete query/network coverage, vulnerability scanning, automatic updates, a Pro edition, or public case-study results that the candidate does not provide.
 
 ## Support capacity

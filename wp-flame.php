@@ -1,11 +1,9 @@
 <?php
 /**
  * Plugin Name: WP Flame
- * Plugin URI:  https://www.chepstowe.consulting
  * Description: Inspect observed WordPress request time with local, bounded flame-style traces.
  * Version:     1.3.0-rc.1
  * Author:      Chepstowe Consulting
- * Author URI:  https://www.chepstowe.consulting
  * License:     GPL-2.0-or-later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
  * Text Domain: wp-flame
