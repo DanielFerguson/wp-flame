@@ -24,7 +24,7 @@ Changing a fixed decision requires updating its architecture/policy source and r
 | Legal seller name | Pending |
 | Trading/product name | Pending |
 | Business address and jurisdiction | Pending |
-| Public billing/support contact | Pending |
+| Public billing/support contact | `gday@danferg.com` (owner-confirmed 2026-07-17) |
 | Settlement currency | Pending |
 | Tax registration and invoice requirements | Pending |
 | Payment method/provider for first five transactions | Pending |
@@ -45,14 +45,14 @@ The first transactions may use a manual invoice or hosted checkout. Do not embed
 | Terms of sale/use | Pending | Pending |
 | Privacy and data handling | Pending | Pending |
 | Refund policy | Pending | Pending |
-| Support scope/contact | Pending | Pending |
+| Support scope/contact | `mailto:gday@danferg.com` | Owner-confirmed 2026-07-17; public support-policy URL still pending |
 | Compatibility/requirements | Pending | Pending |
 | Mode and measured-overhead evidence | Pending | Pending |
 | Installation/quickstart | Pending | Pending |
 | Release notes/checksum/provenance | Pending | Pending |
-| Responsible disclosure for WP Flame itself | Pending | Pending |
+| Responsible disclosure for WP Flame itself | `mailto:gday@danferg.com` | Owner-confirmed 2026-07-17; public policy URL still pending |
 
-The legacy `https://www.chepstowe.consulting` Plugin/Author URI did not resolve during the 2026-07-16 release audit and public search did not establish a verified replacement. The optional dead metadata links were removed from the candidate. Do not restore them or publish a disclosure/support link until the owner has verified the destination and its private-contact workflow.
+The legacy `https://www.chepstowe.consulting` Plugin/Author URI did not resolve during the 2026-07-16 release audit and public search did not establish a verified replacement. The optional dead metadata links remain removed. The owner supplied `gday@danferg.com` as the support and private-disclosure route on 2026-07-17; do not restore the dead domain or add a future web URL until its destination and private-contact workflow have been verified.
 
 Website copy must not describe automatic optimization, browser/Core Web Vitals monitoring, complete PHP profiling, complete query/network coverage, vulnerability scanning, automatic updates, a Pro edition, or public case-study results that the candidate does not provide.
 
@@ -60,7 +60,7 @@ Website copy must not describe automatic optimization, browser/Core Web Vitals m
 
 | Required decision | Owner value |
 | --- | --- |
-| Named support inbox/form | Pending |
+| Named support inbox/form | `gday@danferg.com` |
 | Supported days and timezone | Pending |
 | Initial response target, explicitly not an uptime SLA | Pending |
 | Maximum active founding cohort | Pending, no more than 20 |

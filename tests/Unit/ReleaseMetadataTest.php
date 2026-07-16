@@ -157,17 +157,13 @@ class ReleaseMetadataTest extends TestCase
     {
         $plugin = $this->file('wp-flame.php');
         $security = $this->file('SECURITY.md');
+        $support = $this->file('docs/SUPPORT.md');
 
         $this->assertStringNotContainsString('chepstowe.consulting', $plugin);
         $this->assertStringNotContainsString('chepstowe.consulting', $security);
-        $this->assertStringContainsString(
-            'must be published alongside the official release notes before any production distribution',
-            $security
-        );
-        $this->assertStringContainsString(
-            'submitted only through that published private route',
-            $security
-        );
+        $this->assertStringContainsString('[gday@danferg.com](mailto:gday@danferg.com)', $security);
+        $this->assertStringContainsString('[gday@danferg.com](mailto:gday@danferg.com)', $support);
+        $this->assertStringContainsString('Do not send reports through a public issue tracker', $security);
     }
 
     public function test_release_package_contains_every_linked_operator_document(): void

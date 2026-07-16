@@ -27,4 +27,4 @@ Expert performance reviews, if offered, are separately priced and scoped. Buying
 4. Include screenshots or redacted exports only after reviewing them.
 5. Never send credentials, cookies, license keys, raw SQL literals, personal data, or an unreviewed database dump.
 
-The public support channel and paid response targets must be inserted on the commercial website before checkout opens. Until beta capacity is measured, no guaranteed SLA is promised.
+The public support channel is [gday@danferg.com](mailto:gday@danferg.com). Paid response targets must be published on the commercial website before checkout opens. Until beta capacity is measured, no guaranteed SLA is promised.
