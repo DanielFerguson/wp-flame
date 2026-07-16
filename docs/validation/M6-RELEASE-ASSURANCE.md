@@ -1,8 +1,8 @@
 # M6 release-time application assurance review
 
 Review date: 2026-07-16
-Scope: public v1 Community measurement plugin before licensing/authenticated updates
-Outcome: no unresolved release-blocking finding in the reviewed scope; M7 updater/entitlement code requires its own follow-up review before packaging
+Scope: public v1 performance-measurement plugin before any licensing or authenticated-update implementation
+Outcome: no unresolved release-blocking finding in the reviewed scope; the directly distributed single-edition RC has no updater or entitlement runtime, and any later implementation requires its own follow-up review
 
 This is an assurance review of WP Flame itself. It is not a vulnerability-scanning feature, customer-facing security monitor, or guarantee about the monitored site.
 
@@ -23,9 +23,9 @@ This is an assurance review of WP Flame itself. It is not a vulnerability-scanni
 | M6-A-005 | Trace-controlled DOM content | Pass | PHP views escape output. The flame graph bounds and escapes trace strings before parsing SVG, never assigns trace data through raw `innerHTML`, imports the parsed SVG node, and builds tooltip/detail content with `textContent`/DOM methods. Malformed/cyclic/deep/oversized metadata fixtures and axe/browser tests pass. |
 | M6-A-006 | Failure isolation | Pass | Stopped collectors no-op, instrumentor failures become capability/incompleteness evidence, persistence failure returns an explicit result without changing the monitored response, and mu-plugin failure enters degraded mode. Browser coverage proves reversible persistence failure. |
 | M6-A-007 | Storage and retention bounds | Pass after remediation | Row/byte quotas, trace/span limits, bounded retention, migration locks, and resumable multisite operations are enforced. M6 benchmarking found an unbounded-cost `SUM(LENGTH(LONGTEXT))` quota scan; schema v6 now stores `trace_bytes`, backfills in 500-row batches, and uses the compact numeric field for exact quota totals. Focused integration evidence: 25 tests/393 assertions. |
-| M6-A-008 | External communication | Pass for Community measurement scope | The current plugin adds no analytics, license, telemetry, update, or WP Flame service request. WordPress/plugin HTTP requests may be observed but are not forwarded. Public documentation states this explicitly. |
+| M6-A-008 | External communication | Pass for the single-edition RC scope | The current plugin adds no analytics, license, telemetry, update, or WP Flame service request. WordPress/plugin HTTP requests may be observed but are not forwarded. Public documentation states this explicitly. |
 | M6-A-009 | Dependency exposure | Pass | Runtime remains dependency-free. Composer audit and npm audit are release gates; the resolved JavaScript dependency graph reports no known advisory at this review. |
-| M6-A-010 | Update authenticity and entitlement failure | Required M7 follow-up | Authenticated Pro updates/licensing are not implemented in this scope. M7 must review metadata authenticity, TLS/host pinning assumptions, package integrity, rollback, staging activation, expiry, consent/disclosure, and service-unavailable behavior. No approval is inherited from this review. |
+| M6-A-010 | Update authenticity and entitlement failure | Not applicable to the direct RC; mandatory follow-up if introduced | The accepted RC has no licensing client, entitlement check, or custom updater. Any later implementation must review metadata authenticity, TLS/host assumptions, package integrity, rollback, staging activation, expiry, consent/disclosure, and service-unavailable behavior. No approval is inherited from this review. |
 
 ## Quality-baseline decision
 
@@ -73,4 +73,4 @@ Plugin Check, MariaDB, PHP 8.5, lower-bound WordPress/PHP, package-content, and 
 
 ## Packaged-plugin review
 
-The assembled `wp-flame-1.2.0.zip` was scanned locally with Plugin Check 2.0.0 using the same non-PHPCS checks configured in CI. It returned zero errors. Remaining warnings are documented compatibility/distribution constraints: deliberate direct database access for an APM datastore and instrumentation, early MU-plugin globals, the generated Composer autoloader without development metadata, the external WPGraphQL hook name, and the WordPress.org-reserved `WP Flame` name/slug. WPCS remains a separate enforced no-growth gate, so excluding Plugin Check's duplicate PHPCS review does not remove coding-standard enforcement.
+The assembled `wp-flame-1.3.0-rc.1.zip` was scanned locally with Plugin Check 2.0.0 using the same non-PHPCS checks configured in CI. It returned zero errors. Remaining warnings are documented compatibility/distribution constraints: deliberate direct database access for an APM datastore and instrumentation, early MU-plugin globals, the generated Composer autoloader without development metadata, the external WPGraphQL hook name, and the WordPress.org-reserved `WP Flame` name/slug. WPCS remains a separate enforced no-growth gate, so excluding Plugin Check's duplicate PHPCS review does not remove coding-standard enforcement.

@@ -23,10 +23,10 @@ Allowed states: `triage`, `confirmed`, `fixing`, `retest`, `closed`, or `deferre
 | Gate | Current state | Required evidence | Owner |
 | --- | --- | --- | --- |
 | M7 paid design-partner evidence | Blocked on real transactions | Five paid transactions, three repeat users, workflow and objection records, refund/support evidence | Product owner |
-| Edition and distribution decision | Pending paid evidence | Approved Community/Pro boundary and chosen channel | Product owner |
+| Post-RC public edition and distribution decision | Pending paid evidence | Approved later Community/Pro or single-edition boundary and chosen broad-sales channel | Product owner |
 | Checkout/licensing/updater | Not implemented by design | Vendor sandbox proof and application assurance follow-up if Pro proceeds | Product + engineering |
 | Seller/support/legal publication | Drafts only | Seller identity, contact, terms, privacy, refund, support, tax and checkout configuration reviewed and published | Product owner + qualified adviser |
-| Official RC artifact | Local proof only | Reviewed commit, exact tag, full green tag gate, immutable ZIP/checksum/provenance | Release owner |
+| Official RC artifact | Reviewed local branch; remote and exact tag absent | Publish/review/merge `feat/wp-flame-v1-rc`, create the exact tag, obtain a fully green tag gate, and retain the immutable ZIP/checksum/provenance | Release owner |
 | Paid RC cohort | Not started | 10–20 authorized paid partners with qualifying workflows | Product owner |
 | Field safety window | Not started | 14 consecutive qualifying days and exposure log | Release owner |
 | Permissioned cases | Not started | Three independently approved compatible before/after cases | Product owner |

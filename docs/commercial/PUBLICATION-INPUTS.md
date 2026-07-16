@@ -70,11 +70,13 @@ Measure actual onboarding minutes, support minutes, response time, refunds, and 
 
 ## Repository release authorization
 
-Repository authorization was granted on 2026-07-16 for the complete reviewed candidate, excluding generated caches and artifacts. The candidate was organized on `feat/wp-flame-v1-rc` as:
+Repository authorization was granted on 2026-07-16 for the complete reviewed candidate, excluding generated caches and artifacts. The candidate was organized on `feat/wp-flame-v1-rc` as three core logical commits:
 
 - `136f273` — product, commercial, support, and release documentation.
 - `4014bcb` — runtime performance diagnosis and focused behavior tests.
 - `3b82fa3` — CI, deterministic packaging, browser QA, and quality gates.
+
+Subsequent documentation-only commits reconcile the authorization and assurance ledgers with that committed state; they do not alter the packaged runtime.
 
 The tracked worktree was clean after the commits. Generated `.phpunit.result.cache`, ZIPs, build output, test results, environment homes, dependency directories, and distribution output were not committed.
 
