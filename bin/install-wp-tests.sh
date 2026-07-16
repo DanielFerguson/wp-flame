@@ -142,8 +142,7 @@ elif [[ $WP_VERSION == 'nightly' || $WP_VERSION == 'trunk' ]]; then
 else
 	LATEST_JSON="$TMPDIR/wp-latest.json"
 	download https://api.wordpress.org/core/version-check/1.7/ "$LATEST_JSON"
-	grep -E '[0-9]+\.[0-9]+(\.[0-9]+)?' "$LATEST_JSON"
-	LATEST_VERSION=$(grep -o '"version":"[^"]*"' "$LATEST_JSON" | sed 's/"version":"//;s/"//')
+	LATEST_VERSION=$(grep -o '"version":"[^"]*"' "$LATEST_JSON" | sed -n '1{s/"version":"//;s/"//;p;}')
 	if [[ -z "$LATEST_VERSION" ]]; then
 		echo "Latest WordPress version could not be found"
 		exit 1

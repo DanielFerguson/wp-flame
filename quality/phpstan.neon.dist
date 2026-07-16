@@ -1,0 +1,14 @@
+includes:
+    - ../vendor/szepeviktor/phpstan-wordpress/extension.neon
+    - phpstan-baseline.neon
+
+parameters:
+    level: 5
+    paths:
+        - ../src
+        - ../wp-flame.php
+        - ../uninstall.php
+        - ../mu-plugin/wp-flame-early-hooks.php
+    tmpDir: ../build/phpstan
+    treatPhpDocTypesAsCertain: false
+    reportUnmatchedIgnoredErrors: true

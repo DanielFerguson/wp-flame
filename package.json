@@ -3,13 +3,19 @@
     "wp-env:start": "WP_ENV_HOME=.wp-env-home wp-env start",
     "wp-env:stop": "WP_ENV_HOME=.wp-env-home wp-env stop",
     "compat:smoke": "bash bin/compat-smoke.sh",
-    "test:js": "node tests/js/run-tests.js"
+    "test:js": "node tests/js/run-tests.js",
+    "test:e2e": "playwright test",
+    "test:accessibility": "playwright test --grep @accessibility",
+    "test:performance": "WP_FLAME_BENCHMARK_RUNS=10 WP_FLAME_BENCHMARK_WARMUP=2 WP_FLAME_ALLOW_SHORT_BENCHMARK=1 node bin/benchmark-overhead.mjs && WP_FLAME_PERFORMANCE_MIN_RUNS=10 node bin/check-performance-budget.mjs build/benchmarks"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.12.1",
+    "@playwright/test": "^1.61.1",
     "@wordpress/env": "^11.1.0"
   },
   "overrides": {
     "ajv": "8.20.0",
+    "js-yaml": "3.15.0",
     "qs": "6.15.2",
     "ws": "8.21.0"
   }

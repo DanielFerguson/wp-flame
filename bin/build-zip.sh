@@ -35,8 +35,10 @@ if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
 
     UNTRACKED_RUNTIME_FILES=$(
         git ls-files --others --exclude-standard -- \
-            wp-flame.php uninstall.php readme.txt README.md CHANGELOG.md composer.json composer.lock \
-            src assets mu-plugin
+            wp-flame.php uninstall.php readme.txt README.md CHANGELOG.md LICENSE SECURITY.md composer.json composer.lock \
+            src assets mu-plugin docs/FEATURE-GUIDE.md docs/QUICKSTART.md docs/MODE-AND-OVERHEAD.md \
+            docs/PRIVACY.md docs/SUPPORT.md docs/UPDATE-AND-LICENSE-POLICY.md \
+            docs/architecture/RC-DISTRIBUTION.md docs/benchmarks/M6-OVERHEAD-RESULTS.md docs/compatibility/MATRIX.md
     )
     if [[ "${WP_FLAME_ALLOW_DIRTY_BUILD:-}" != "1" && -n "$UNTRACKED_RUNTIME_FILES" ]]; then
         echo "Refusing to build with untracked files in packaged runtime paths:" >&2
@@ -83,8 +85,13 @@ fi
 
 # Assemble plugin into temp directory
 mkdir -p "$PLUGIN_DIR"
-cp wp-flame.php uninstall.php readme.txt README.md CHANGELOG.md composer.json composer.lock "$PLUGIN_DIR/"
+cp wp-flame.php uninstall.php readme.txt README.md CHANGELOG.md LICENSE SECURITY.md composer.json composer.lock "$PLUGIN_DIR/"
 cp -r src assets mu-plugin "$PLUGIN_DIR/"
+mkdir -p "$PLUGIN_DIR/docs/architecture" "$PLUGIN_DIR/docs/benchmarks" "$PLUGIN_DIR/docs/compatibility"
+cp docs/FEATURE-GUIDE.md docs/QUICKSTART.md docs/MODE-AND-OVERHEAD.md docs/PRIVACY.md docs/SUPPORT.md docs/UPDATE-AND-LICENSE-POLICY.md "$PLUGIN_DIR/docs/"
+cp docs/architecture/RC-DISTRIBUTION.md "$PLUGIN_DIR/docs/architecture/"
+cp docs/benchmarks/M6-OVERHEAD-RESULTS.md "$PLUGIN_DIR/docs/benchmarks/"
+cp docs/compatibility/MATRIX.md "$PLUGIN_DIR/docs/compatibility/"
 
 # Install production autoloader in the temp build, leaving the working tree untouched.
 (cd "$PLUGIN_DIR" && composer install --no-dev --optimize-autoloader --quiet)
@@ -97,6 +104,10 @@ required_paths=(
     "wp-flame.php"
     "uninstall.php"
     "readme.txt"
+    "LICENSE"
+    "SECURITY.md"
+    "docs/QUICKSTART.md"
+    "docs/compatibility/MATRIX.md"
     "vendor/autoload.php"
     "src/Collector.php"
     "src/Instrumentation.php"
@@ -120,7 +131,30 @@ done
 
 # Create zip
 rm -f "$OUTFILE"
-(cd "$BUILD_DIR" && zip -rq "$REPO_DIR/$OUTFILE" wp-flame/)
+SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-}
+if [[ -z "$SOURCE_DATE_EPOCH" ]] && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)
+fi
+if [[ ! "$SOURCE_DATE_EPOCH" =~ ^[0-9]+$ ]]; then
+    echo "Invalid SOURCE_DATE_EPOCH: $SOURCE_DATE_EPOCH" >&2
+    exit 1
+fi
+
+# Normalize archive timestamps and ordering so the same tagged source and lock
+# file produce the same bytes on repeated builds.
+WP_FLAME_BUILD_ROOT="$PLUGIN_DIR" SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" php -r '
+$root = getenv("WP_FLAME_BUILD_ROOT");
+$epoch = (int) getenv("SOURCE_DATE_EPOCH");
+$iterator = new RecursiveIteratorIterator(
+    new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS),
+    RecursiveIteratorIterator::SELF_FIRST
+);
+touch($root, $epoch);
+foreach ($iterator as $item) {
+    touch($item->getPathname(), $epoch);
+}
+'
+(cd "$BUILD_DIR" && find wp-flame -print | LC_ALL=C sort | zip -q -X "$REPO_DIR/$OUTFILE" -@)
 
 ZIP_MANIFEST=$(unzip -Z1 "$OUTFILE")
 if echo "$ZIP_MANIFEST" | grep -Eq '(^|/)(tests|node_modules|\.github|bin)/'; then

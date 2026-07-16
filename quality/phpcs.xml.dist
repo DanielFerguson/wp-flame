@@ -1,0 +1,42 @@
+<?xml version="1.0"?>
+<ruleset name="WP Flame">
+    <description>WordPress Coding Standards for WP Flame production PHP.</description>
+
+    <arg name="extensions" value="php"/>
+    <arg name="parallel" value="8"/>
+    <config name="minimum_supported_wp_version" value="6.0"/>
+
+    <rule ref="WordPress-Extra">
+        <!-- Preserve the repository's established PSR-4 filenames and PSR-style formatting. -->
+        <exclude name="Generic.Classes.OpeningBraceSameLine"/>
+        <exclude name="Generic.Formatting.MultipleStatementAlignment"/>
+        <exclude name="Generic.Functions.OpeningFunctionBraceKernighanRitchie"/>
+        <exclude name="Generic.WhiteSpace.DisallowSpaceIndent"/>
+        <exclude name="PEAR.Functions.FunctionCallSignature"/>
+        <exclude name="Universal.Arrays.DisallowShortArraySyntax"/>
+        <exclude name="Universal.Operators.DisallowStandalonePostIncrementDecrement"/>
+        <exclude name="WordPress.Arrays.MultipleStatementAlignment"/>
+        <exclude name="WordPress.Files.FileName"/>
+        <exclude name="WordPress.PHP.YodaConditions"/>
+    </rule>
+
+    <rule ref="WordPress.WP.I18n">
+        <properties>
+            <property name="text_domain" type="array">
+                <element value="wp-flame"/>
+            </property>
+        </properties>
+    </rule>
+
+    <rule ref="WordPress.NamingConventions.PrefixAllGlobals">
+        <properties>
+            <property name="prefixes" type="array">
+                <element value="wp_flame"/>
+                <element value="WP_FLAME"/>
+                <element value="WPFlame"/>
+            </property>
+        </properties>
+    </rule>
+
+    <exclude-pattern>*/vendor/*</exclude-pattern>
+</ruleset>

@@ -1,8 +1,12 @@
 vendor/
 node_modules/
 .wp-env-home/
+.wp-env-release-home*/
 .DS_Store
 .playwright-mcp/
 wp-flame-*.zip
 .superpowers/
 .worktrees/
+build/
+dist/
+test-results/

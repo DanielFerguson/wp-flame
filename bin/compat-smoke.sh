@@ -60,6 +60,19 @@ fetch() {
     curl -fsS --max-time 30 "$url" >/dev/null
 }
 
+request_snapshot() {
+    local url="$1"
+    local output_file="$2"
+    curl -sS --max-time 30 --output "$output_file" --write-out '%{http_code}' "$url"
+}
+
+normalized_snapshot_checksum() {
+    local input_file="$1"
+    # bbPress versions its default stylesheet with the current Unix timestamp,
+    # so normalize only that request-volatile asset token before comparison.
+    sed -E 's/\?ver=[0-9]{10}/?ver={timestamp}/g' "$input_file" | cksum
+}
+
 sql_uint() {
     local value="$1"
     if [[ ! "$value" =~ ^[0-9]+$ ]]; then
@@ -68,6 +81,12 @@ sql_uint() {
     fi
 
     printf '%s' "$value"
+}
+
+sql_result_uint() {
+    local value="$1"
+    value="$(printf '%s' "$value" | tr -d '[:space:]')"
+    sql_uint "$value"
 }
 
 sql_like_literal() {
@@ -83,20 +102,20 @@ sql_like_literal() {
 post_graphql() {
     curl -fsS --max-time 30 \
         -H 'Content-Type: application/json' \
-        --data '{"query":"query WPFlameSmoke { generalSettings { title } }"}' \
+        --data '{"operationName":"WPFlameSmoke","query":"query WPFlameSmoke { generalSettings { title } }"}' \
         "$BASE_URL/graphql" >/dev/null
 }
 
 trace_count() {
     local prefix
     prefix="$(wp_cli db prefix | tr -d '\r')"
-    wp_cli db query "SELECT COUNT(*) FROM ${prefix}flame_traces" --skip-column-names | tr -d '[:space:]'
+    sql_result_uint "$(wp_cli db query "SELECT COUNT(*) FROM ${prefix}flame_traces" --skip-column-names)"
 }
 
 trace_max_row_id() {
     local prefix
     prefix="$(wp_cli db prefix | tr -d '\r')"
-    wp_cli db query "SELECT COALESCE(MAX(id), 0) FROM ${prefix}flame_traces" --skip-column-names | tr -d '[:space:]'
+    sql_result_uint "$(wp_cli db query "SELECT COALESCE(MAX(id), 0) FROM ${prefix}flame_traces" --skip-column-names)"
 }
 
 trace_count_after() {
@@ -104,7 +123,7 @@ trace_count_after() {
     local prefix
     after_id="$(sql_uint "$after_id")"
     prefix="$(wp_cli db prefix | tr -d '\r')"
-    wp_cli db query "SELECT COUNT(*) FROM ${prefix}flame_traces WHERE id > ${after_id}" --skip-column-names | tr -d '[:space:]'
+    sql_result_uint "$(wp_cli db query "SELECT COUNT(*) FROM ${prefix}flame_traces WHERE id > ${after_id}" --skip-column-names)"
 }
 
 trace_like_count_after() {
@@ -114,7 +133,7 @@ trace_like_count_after() {
     after_id="$(sql_uint "$after_id")"
     pattern="$(sql_like_literal "$pattern")"
     prefix="$(wp_cli db prefix | tr -d '\r')"
-    wp_cli db query "SELECT COUNT(*) FROM ${prefix}flame_traces WHERE id > ${after_id} AND trace_data LIKE '%${pattern}%' ESCAPE '\\\\'" --skip-column-names | tr -d '[:space:]'
+    sql_result_uint "$(wp_cli db query "SELECT COUNT(*) FROM ${prefix}flame_traces WHERE id > ${after_id} AND trace_data LIKE '%${pattern}%' ESCAPE '\\\\'" --skip-column-names)"
 }
 
 post_url() {
@@ -133,8 +152,25 @@ ensure_wp_env_ready
 
 echo "Installing compatibility plugins..."
 wp_cli plugin install "${SMOKE_PLUGINS[@]}" --activate
+# wp-env can preserve an active source plugin while its copied early loader was
+# removed by another lifecycle test. Exercise the real deactivation/activation
+# path so every compatibility run starts with a verified current owned loader.
+if wp_cli plugin is-active "$PLUGIN_SLUG" >/dev/null 2>&1; then
+    wp_cli plugin deactivate "$PLUGIN_SLUG"
+fi
 wp_cli plugin activate "$PLUGIN_SLUG"
 wp_cli plugin is-active "$PLUGIN_SLUG" >/dev/null
+wp_cli eval 'if (!defined("WP_FLAME_MU_VERSION") || WP_FLAME_MU_VERSION !== WP_FLAME_VERSION) { throw new RuntimeException("WP Flame early loader is missing or stale after activation."); }'
+
+echo "Creating child-theme attribution fixture..."
+wp_cli theme is-installed twentytwentyfive >/dev/null 2>&1 || wp_cli theme install twentytwentyfive
+wp_cli scaffold child-theme wp-flame-smoke-child \
+    --parent_theme=twentytwentyfive \
+    --theme_name='WP Flame Smoke Child' \
+    --author='WP Flame' \
+    --activate \
+    --force
+wp_cli eval '$file = get_stylesheet_directory() . "/functions.php"; file_put_contents($file, file_get_contents($file) . "\nfunction wp_flame_smoke_child_early_fixture() {}\nadd_action( \"init\", \"wp_flame_smoke_child_early_fixture\", 2 );\n");'
 
 echo "Configuring WP Flame smoke settings..."
 wp_cli option update wp_flame_enabled 1
@@ -165,9 +201,32 @@ PRODUCT_URL="$(post_url "$PRODUCT_ID")"
 FORUM_URL="$(post_url "$FORUM_ID")"
 PAGE_URL="$(post_url "$PAGE_ID")"
 
+BASELINE_BODY="$(mktemp)"
+MODE_BODY="$(mktemp)"
+trap 'rm -f "$BASELINE_BODY" "$MODE_BODY"' EXIT
+
+echo "Recording instrumentation-off response fixture..."
+wp_cli option update wp_flame_enabled 0
+BASELINE_STATUS="$(request_snapshot "$BASE_URL/?wp_flame_equivalence=1" "$BASELINE_BODY")"
+BASELINE_CHECKSUM="$(normalized_snapshot_checksum "$BASELINE_BODY")"
+wp_cli option update wp_flame_enabled 1
+
 for mode in safe standard deep; do
     echo "Smoke testing instrumentation mode: $mode"
-    wp_cli option update wp_flame_instrumentation_mode "$mode"
+    if [[ "$mode" == "deep" ]]; then
+        wp_cli option update wp_flame_instrumentation_mode standard
+        wp_cli eval 'update_option("wp_flame_deep_mode_expires_at", time() + 300);'
+    else
+        wp_cli option update wp_flame_instrumentation_mode "$mode"
+        wp_cli option delete wp_flame_deep_mode_expires_at >/dev/null 2>&1 || true
+    fi
+
+    MODE_STATUS="$(request_snapshot "$BASE_URL/?wp_flame_equivalence=1" "$MODE_BODY")"
+    MODE_CHECKSUM="$(normalized_snapshot_checksum "$MODE_BODY")"
+    if [[ "$MODE_STATUS" != "$BASELINE_STATUS" || "$MODE_CHECKSUM" != "$BASELINE_CHECKSUM" ]]; then
+        echo "Instrumentation changed the response fixture in $mode mode; baseline_status=$BASELINE_STATUS mode_status=$MODE_STATUS" >&2
+        exit 1
+    fi
 
     before="$(trace_max_row_id)"
     fetch "$BASE_URL/?wp_flame_smoke=$mode"
@@ -199,7 +258,22 @@ for mode in safe standard deep; do
             echo "Expected deep mode to record callback hook spans, found none." >&2
             exit 1
         fi
+
+        child_theme_span_count="$(trace_like_count_after "$before" '"source":"child-theme:wp-flame-smoke-child"')"
+        if [[ "$child_theme_span_count" -le 0 ]]; then
+            echo "Expected deep mode to attribute a child-theme callback, found none." >&2
+            exit 1
+        fi
+    fi
+
+    graphql_operation_count="$(trace_like_count_after "$before" '"graphql_operation":"WPFlameSmoke"')"
+    graphql_resolver_count="$(trace_like_count_after "$before" '"hook":"graphql:RootQuery.generalSettings"')"
+    if [[ "$graphql_operation_count" -le 0 || "$graphql_resolver_count" -le 0 ]]; then
+        echo "Expected live WPGraphQL operation and root-resolver spans in $mode mode; operations=$graphql_operation_count resolvers=$graphql_resolver_count" >&2
+        exit 1
     fi
 done
+
+wp_cli option delete wp_flame_deep_mode_expires_at >/dev/null 2>&1 || true
 
 echo "Compatibility smoke passed."

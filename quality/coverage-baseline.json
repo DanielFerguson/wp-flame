@@ -1,0 +1,7 @@
+{
+    "schema_version": 1,
+    "scope": "src",
+    "minimum_statement_coverage_percent": 63.41,
+    "measured_covered_statements": 4355,
+    "measured_statements": 6868
+}
