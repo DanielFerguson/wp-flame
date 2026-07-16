@@ -11,7 +11,17 @@ if ( ! defined( 'WP_UNINSTALL_PLUGIN' ) ) {
     exit;
 }
 
+$wp_flame_uninstall_autoloader = __DIR__ . '/vendor/autoload.php';
+if ( is_readable( $wp_flame_uninstall_autoloader ) ) {
+    require_once $wp_flame_uninstall_autoloader;
+}
+
 global $wpdb;
+
+$wp_flame_uninstall_mu_hash = is_multisite()
+    ? get_site_option( 'wp_flame_mu_plugin_hash', '' )
+    : get_option( 'wp_flame_mu_plugin_hash', '' );
+$wp_flame_uninstall_mu_hash = is_string( $wp_flame_uninstall_mu_hash ) ? $wp_flame_uninstall_mu_hash : '';
 
 function wp_flame_uninstall_mu_plugin_dir(): string {
     return defined( 'WPMU_PLUGIN_DIR' ) && is_string( WPMU_PLUGIN_DIR ) && WPMU_PLUGIN_DIR !== ''
@@ -19,17 +29,18 @@ function wp_flame_uninstall_mu_plugin_dir(): string {
         : '';
 }
 
-/**
- * @return array<int, int>
- */
-function wp_flame_uninstall_all_site_ids(): array {
+/** @return array<int, int> */
+function wp_flame_uninstall_site_batch( int $offset, int $limit = 10 ): array {
     if ( ! function_exists( 'get_sites' ) ) {
         return [];
     }
 
     $site_ids = get_sites( [
         'fields' => 'ids',
-        'number' => 0,
+        'number' => max( 1, min( 100, $limit ) ),
+        'offset' => max( 0, $offset ),
+        'orderby' => 'id',
+        'order' => 'ASC',
     ] );
 
     if ( ! is_array( $site_ids ) ) {
@@ -43,9 +54,11 @@ function wp_flame_uninstall_site(): void {
     global $wpdb;
 
     // Drop custom table for the current site.
-    $table = $wpdb->prefix . 'flame_traces';
-    // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name is safe: prefix + static suffix
-    $wpdb->query( "DROP TABLE IF EXISTS `{$table}`" );
+    foreach ( [ 'flame_traces', 'flame_sessions', 'flame_environments', 'flame_rollups' ] as $suffix ) {
+        $table = $wpdb->prefix . $suffix;
+        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name is safe: prefix + static suffix
+        $wpdb->query( "DROP TABLE IF EXISTS `{$table}`" );
+    }
 
     // Delete all plugin options for the current site.
     $option_like = $wpdb->esc_like( 'wp_flame_' ) . '%';
@@ -67,19 +80,41 @@ function wp_flame_uninstall_site(): void {
 
     // Clear scheduled cron events for the current site.
     wp_clear_scheduled_hook( 'wp_flame_prune_traces' );
+    wp_clear_scheduled_hook( 'wp_flame_prune_traces_continue' );
+    wp_clear_scheduled_hook( 'wp_flame_run_migration' );
+    wp_clear_scheduled_hook( 'wp_flame_rollup_backfill' );
 }
 
 if ( is_multisite() && function_exists( 'get_sites' ) ) {
-    foreach ( wp_flame_uninstall_all_site_ids() as $blog_id ) {
-        switch_to_blog( (int) $blog_id );
-        try {
-            wp_flame_uninstall_site();
-        } finally {
-            restore_current_blog();
+    $wp_flame_uninstall_state = get_site_option( 'wp_flame_uninstall_state', [] );
+    $wp_flame_uninstall_offset = is_array( $wp_flame_uninstall_state ) && isset( $wp_flame_uninstall_state['offset'] )
+        ? max( 0, (int) $wp_flame_uninstall_state['offset'] )
+        : 0;
+    do {
+        $wp_flame_uninstall_site_ids = wp_flame_uninstall_site_batch( $wp_flame_uninstall_offset, 10 );
+        $wp_flame_uninstall_has_more = count( $wp_flame_uninstall_site_ids ) === 10;
+        foreach ( $wp_flame_uninstall_site_ids as $blog_id ) {
+            switch_to_blog( (int) $blog_id );
+            try {
+                wp_flame_uninstall_site();
+            } finally {
+                restore_current_blog();
+            }
+
+            $wp_flame_uninstall_offset++;
+            update_site_option( 'wp_flame_uninstall_state', [
+                'offset'     => $wp_flame_uninstall_offset,
+                'updated_at' => gmdate( 'Y-m-d H:i:s' ),
+            ] );
         }
-    }
+    } while ( $wp_flame_uninstall_has_more );
 
     delete_site_option( 'wp_flame_plugin_file' );
+    delete_site_option( 'wp_flame_mu_plugin_hash' );
+    delete_site_option( 'wp_flame_mu_plugin_state' );
+    delete_site_option( 'wp_flame_mu_plugin_failed' );
+    delete_site_option( 'wp_flame_network_maintenance' );
+    delete_site_option( 'wp_flame_uninstall_state' );
 } else {
     wp_flame_uninstall_site();
 }
@@ -88,11 +123,7 @@ if ( is_multisite() && function_exists( 'get_sites' ) ) {
 $mu_dir = wp_flame_uninstall_mu_plugin_dir();
 if ( $mu_dir !== '' ) {
     $mu_file = $mu_dir . '/wp-flame-early-hooks.php';
-    if ( file_exists( $mu_file ) ) {
-        if ( function_exists( 'wp_delete_file' ) ) {
-            wp_delete_file( $mu_file );
-        } else {
-            @unlink( $mu_file );
-        }
+    if ( file_exists( $mu_file ) && class_exists( 'WPFlame\MuPluginManager' ) ) {
+        WPFlame\MuPluginManager::remove( $mu_file, $wp_flame_uninstall_mu_hash );
     }
 }

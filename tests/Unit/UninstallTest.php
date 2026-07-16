@@ -23,12 +23,13 @@ class UninstallTest extends TestCase
         );
     }
 
-    public function test_multisite_uninstall_queries_all_site_ids_explicitly(): void
+    public function test_multisite_uninstall_uses_checkpointed_site_batches(): void
     {
-        $this->assertStringContainsString('function wp_flame_uninstall_all_site_ids(): array', $this->source);
-        $this->assertStringContainsString("'number' => 0", $this->source);
-        $this->assertStringContainsString('foreach ( wp_flame_uninstall_all_site_ids() as $blog_id )', $this->source);
-        $this->assertStringNotContainsString("get_sites( [ 'fields' => 'ids' ] )", $this->source);
+        $this->assertStringContainsString('function wp_flame_uninstall_site_batch( int $offset, int $limit = 10 ): array', $this->source);
+        $this->assertStringContainsString("'offset' => max( 0, \$offset )", $this->source);
+        $this->assertStringContainsString("get_site_option( 'wp_flame_uninstall_state', [] )", $this->source);
+        $this->assertStringContainsString("update_site_option( 'wp_flame_uninstall_state'", $this->source);
+        $this->assertStringContainsString('} while ( $wp_flame_uninstall_has_more );', $this->source);
     }
 
     public function test_mu_plugin_directory_access_is_guarded_on_uninstall(): void
@@ -46,5 +47,18 @@ class UninstallTest extends TestCase
 
         $this->assertStringNotContainsString('WPMU_PLUGIN_DIR', (string) $unguarded);
         $this->assertStringContainsString('$mu_dir = wp_flame_uninstall_mu_plugin_dir();', $this->source);
+    }
+
+    public function test_all_capture_tables_are_removed_for_each_site(): void
+    {
+        $this->assertStringContainsString("[ 'flame_traces', 'flame_sessions', 'flame_environments', 'flame_rollups' ]", $this->source);
+        $this->assertStringContainsString('DROP TABLE IF EXISTS `{$table}`', $this->source);
+    }
+
+    public function test_uninstall_removes_only_the_last_verified_owned_mu_plugin(): void
+    {
+        $this->assertStringContainsString("get_option( 'wp_flame_mu_plugin_hash', '' )", $this->source);
+        $this->assertStringContainsString('WPFlame\MuPluginManager::remove( $mu_file, $wp_flame_uninstall_mu_hash )', $this->source);
+        $this->assertStringNotContainsString('@unlink( $mu_file )', $this->source);
     }
 }

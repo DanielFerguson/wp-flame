@@ -273,6 +273,7 @@ namespace WPFlame\Tests\Unit {
             $gql->register($collector);
             $gql->activate_wpgraphql_hooks();
 
+            $this->assertArrayHasKey('do_graphql_request', $GLOBALS['wp_flame_test_filters']);
             $this->assertArrayHasKey('graphql_process_request', $GLOBALS['wp_flame_test_filters']);
             $this->assertArrayHasKey('graphql_return_response', $GLOBALS['wp_flame_test_filters']);
         }
@@ -286,20 +287,23 @@ namespace WPFlame\Tests\Unit {
             $gql->activate_wpgraphql_hooks();
             $gql->activate_wpgraphql_hooks();
 
+            $this->assertCount(1, $GLOBALS['wp_flame_test_filters']['do_graphql_request']);
             $this->assertCount(1, $GLOBALS['wp_flame_test_filters']['graphql_process_request']);
             $this->assertCount(1, $GLOBALS['wp_flame_test_filters']['graphql_return_response']);
             $this->assertCount(1, $GLOBALS['wp_flame_test_filters']['graphql_pre_resolve_field']);
             $this->assertCount(1, $GLOBALS['wp_flame_test_filters']['graphql_resolve_field']);
         }
 
-        public function test_register_does_not_register_operation_hooks(): void
+        public function test_register_lazily_registers_endpoint_operation_and_resolver_hooks(): void
         {
             $collector = $this->make_collector();
             $gql = new GraphQL();
             $gql->register($collector);
 
-            $this->assertArrayNotHasKey('graphql_process_request', $GLOBALS['wp_flame_test_filters']);
-            $this->assertArrayNotHasKey('graphql_return_response', $GLOBALS['wp_flame_test_filters']);
+            $this->assertArrayHasKey('do_graphql_request', $GLOBALS['wp_flame_test_filters']);
+            $this->assertArrayHasKey('graphql_return_response', $GLOBALS['wp_flame_test_filters']);
+            $this->assertArrayHasKey('graphql_pre_resolve_field', $GLOBALS['wp_flame_test_filters']);
+            $this->assertArrayHasKey('graphql_resolve_field', $GLOBALS['wp_flame_test_filters']);
         }
 
         public function test_operation_span_created_and_closed(): void
@@ -339,7 +343,7 @@ namespace WPFlame\Tests\Unit {
         public function test_operation_query_text_requires_opt_in(): void
         {
             $collector = $this->make_collector();
-            $gql = new GraphQL(false, null, true);
+            $gql = new GraphQL(false, true);
             $gql->register($collector);
             $gql->activate_wpgraphql_hooks();
 
@@ -358,10 +362,39 @@ namespace WPFlame\Tests\Unit {
             $this->assertSame('{ viewer { id email } }', $trace->spans[0]->meta['graphql_query']);
         }
 
+        public function test_batched_operations_use_a_lifo_span_stack(): void
+        {
+            $collector = $this->make_collector();
+            $gql = new GraphQL();
+            $gql->register($collector);
+            $gql->activate_wpgraphql_hooks();
+
+            $operation = static function (string $name): object {
+                return new class($name) {
+                    private string $name;
+                    public function __construct(string $name) { $this->name = $name; }
+                    public function get_query(): string { return '{ viewer { id } }'; }
+                    public function get_operation_name(): string { return $this->name; }
+                };
+            };
+            $process = $GLOBALS['wp_flame_test_filters']['graphql_process_request'][0]['callback'];
+            $respond = $GLOBALS['wp_flame_test_filters']['graphql_return_response'][0]['callback'];
+
+            $process($operation('First'));
+            $process($operation('Second'));
+            $respond([]);
+            $respond([]);
+
+            $trace = $collector->get_trace();
+            $this->assertCount(2, $trace->spans);
+            $this->assertSame('GraphQL: Second', $trace->spans[0]->name);
+            $this->assertSame('GraphQL: First', $trace->spans[1]->name);
+        }
+
         public function test_operation_query_text_is_bounded_when_opted_in(): void
         {
             $collector = $this->make_collector();
-            $gql = new GraphQL(false, null, true);
+            $gql = new GraphQL(false, true);
             $gql->register($collector);
             $gql->activate_wpgraphql_hooks();
 
@@ -506,6 +539,25 @@ namespace WPFlame\Tests\Unit {
             $this->assertSame('RootQuery.' . $bounded_field, $trace->spans[0]->name);
             $this->assertSame($bounded_field, $trace->spans[0]->meta['field_key']);
             $this->assertSame('graphql:RootQuery.' . $bounded_field, $trace->spans[0]->meta['hook']);
+        }
+
+        public function test_callable_root_resolver_records_callback_and_source(): void
+        {
+            $collector = $this->make_collector();
+            $gql = new GraphQL();
+            $gql->register($collector);
+            $gql->activate_wpgraphql_hooks();
+
+            $pre_resolve = $GLOBALS['wp_flame_test_filters']['graphql_pre_resolve_field'][0]['callback'];
+            $resolve = $GLOBALS['wp_flame_test_filters']['graphql_resolve_field'][0]['callback'];
+            $resolver = static function (): array { return []; };
+
+            $pre_resolve(null, null, [], null, null, 'RootQuery', 'products', null, $resolver);
+            $resolve([], null, [], null, null, 'RootQuery', 'products', null, $resolver);
+
+            $span = $collector->get_trace()->spans[0];
+            $this->assertArrayHasKey('callback', $span->meta);
+            $this->assertNotSame('wpgraphql', $span->source);
         }
 
         public function test_non_root_field_does_not_create_span(): void
@@ -654,11 +706,28 @@ namespace WPFlame\Tests\Unit {
             $this->assertFalse((new GraphQL())->is_applicable());
         }
 
+        public function test_is_applicable_bounds_custom_endpoint_filter_values(): void
+        {
+            $_SERVER['REQUEST_URI'] = '/graphql';
+            $GLOBALS['wp_flame_test_apply_filters']['graphql_endpoint'][] = function (): string {
+                return str_repeat('custom-endpoint-', 100);
+            };
+
+            $this->assertFalse((new GraphQL())->is_applicable());
+        }
+
+        public function test_is_applicable_bounds_request_path_before_endpoint_matching(): void
+        {
+            $_SERVER['REQUEST_URI'] = '/' . str_repeat('a', 3000) . '/graphql';
+
+            $this->assertFalse((new GraphQL())->is_applicable());
+        }
+
         // -----------------------------------------------------------------------
-        // Tier 2 mode test
+        // Current endpoint mode
         // -----------------------------------------------------------------------
 
-        public function test_tier2_mode_has_db_hooks_but_no_resolver_hooks(): void
+        public function test_endpoint_mode_registers_db_operation_and_resolver_hooks(): void
         {
             $collector = $this->make_collector();
             $gql = new GraphQL();
@@ -667,17 +736,16 @@ namespace WPFlame\Tests\Unit {
             // DB hooks are active
             $this->assertArrayHasKey('log_query_custom_data', $GLOBALS['wp_flame_test_filters']);
 
-            // But NO resolver or operation hooks
-            $this->assertArrayNotHasKey('graphql_pre_resolve_field', $GLOBALS['wp_flame_test_filters']);
-            $this->assertArrayNotHasKey('graphql_resolve_field', $GLOBALS['wp_flame_test_filters']);
-            $this->assertArrayNotHasKey('graphql_process_request', $GLOBALS['wp_flame_test_filters']);
-            $this->assertArrayNotHasKey('graphql_return_response', $GLOBALS['wp_flame_test_filters']);
+            $this->assertArrayHasKey('graphql_pre_resolve_field', $GLOBALS['wp_flame_test_filters']);
+            $this->assertArrayHasKey('graphql_resolve_field', $GLOBALS['wp_flame_test_filters']);
+            $this->assertArrayHasKey('do_graphql_request', $GLOBALS['wp_flame_test_filters']);
+            $this->assertArrayHasKey('graphql_return_response', $GLOBALS['wp_flame_test_filters']);
         }
 
         public function test_db_hooks_are_skipped_when_db_capture_is_disabled(): void
         {
             $collector = $this->make_collector();
-            $gql = new GraphQL(false, null, false, false);
+            $gql = new GraphQL(false, false, false);
             $gql->register($collector);
 
             $this->assertArrayNotHasKey('log_query_custom_data', $GLOBALS['wp_flame_test_filters']);

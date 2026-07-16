@@ -29,6 +29,10 @@ class NoPersistentCache implements InsightRule
      */
     public function analyze( Trace $trace ): array
     {
+        if ( Config::boolean( $trace->meta['external_object_cache_configured'] ?? false ) ) {
+            return [];
+        }
+
         $backend = Config::string_value( $trace->meta['cache_backend'] ?? '', '' );
 
         if ($backend !== 'WP_Object_Cache') {
@@ -45,10 +49,9 @@ class NoPersistentCache implements InsightRule
             new Insight(
                 $this->id(),
                 'info',
-                /* translators: %d: number of cache misses */
                 __('No persistent object cache detected', 'wp-flame'),
-                /* translators: %d: number of cache misses */
                 sprintf(
+                    /* translators: %d: number of cache misses */
                     __('This request had %d cache misses. A persistent cache (Redis or Memcached) would cache these across requests, reducing database load.', 'wp-flame'),
                     $misses
                 )

@@ -14,6 +14,8 @@ class GraphQL implements Instrumentor
     private const MAX_OPERATION_NAME_BYTES = 128;
     private const MAX_RESOLVER_NAME_BYTES = 128;
     private const MAX_GRAPHQL_QUERY_BYTES = 65536;
+    private const MAX_ENDPOINT_BYTES = 160;
+    private const MAX_REQUEST_PATH_BYTES = 2048;
 
     /** @var Collector */
     private $collector;
@@ -21,22 +23,21 @@ class GraphQL implements Instrumentor
     private $full_query_text;
     private bool $full_graphql_query;
     private bool $allow_db = true;
-    /** @var \wpdb|null */
-    private $wpdb;
+    private bool $current_operation_hook_seen = false;
 
     /** @var array<string, string[]> Stack of span IDs per field key for alias handling */
     private array $resolver_span_stacks = [];
 
-    private ?string $operation_span_id = null;
+    /** @var string[] */
+    private array $operation_span_stack = [];
 
     /** @var callable|null Stored for remove_filter() in deactivate() */
     private $db_hook_callback = null;
     private bool $wpgraphql_hooks_registered = false;
 
-    public function __construct( bool $full_query_text = false, ?\wpdb $wpdb = null, bool $full_graphql_query = false, bool $allow_db = true )
+    public function __construct( bool $full_query_text = false, bool $full_graphql_query = false, bool $allow_db = true )
     {
         $this->full_query_text    = $full_query_text;
-        $this->wpdb               = $wpdb;
         $this->full_graphql_query = $full_graphql_query;
         $this->allow_db           = $allow_db;
     }
@@ -47,7 +48,7 @@ class GraphQL implements Instrumentor
             ? Config::string_value( wp_unslash( $_SERVER['REQUEST_URI'] ), '' )
             : '';
         $uri = isset( $_SERVER['REQUEST_URI'] )
-            ? rtrim( parse_url( $request_uri, PHP_URL_PATH ) ?: '', '/' )
+            ? rtrim( $this->limit_string( Config::string_value( parse_url( $request_uri, PHP_URL_PATH ), '' ), self::MAX_REQUEST_PATH_BYTES ), '/' )
             : '';
         return self::is_graphql_endpoint(
             $uri,
@@ -61,18 +62,10 @@ class GraphQL implements Instrumentor
         if ( $this->allow_db ) {
             $this->register_db_hooks();
         }
-
-        add_action( 'init', function () use ( $collector ) {
-            if ( defined( 'GRAPHQL_REQUEST' ) && GRAPHQL_REQUEST ) {
-                $this->activate_wpgraphql_hooks();
-            } else {
-                $this->deactivate();
-                if ( $this->allow_db && $this->wpdb && DB::can_replace( $this->wpdb ) ) {
-                    $GLOBALS['wpdb'] = DB::from_wpdb( $this->wpdb, $collector, $this->full_query_text );
-                }
-                $GLOBALS['wp_flame_skip_callback_wrapping'] = false;
-            }
-        }, 0 );
+        // Applicability is already constrained to the configured GraphQL
+        // endpoint. Register operation/resolver hooks immediately so current
+        // WPGraphQL versions cannot fire them before an init-time constant check.
+        $this->activate_wpgraphql_hooks();
     }
 
     public function requires_savequeries(): bool
@@ -105,18 +98,23 @@ class GraphQL implements Instrumentor
     private static function normalize_endpoint( $endpoint ): string
     {
         if ( is_string( $endpoint ) || is_int( $endpoint ) || is_float( $endpoint ) ) {
-            return (string) $endpoint;
+            return self::limit_static_string( (string) $endpoint, self::MAX_ENDPOINT_BYTES );
         }
 
         if ( is_object( $endpoint ) && method_exists( $endpoint, '__toString' ) ) {
             try {
-                return (string) $endpoint;
+                return self::limit_static_string( (string) $endpoint, self::MAX_ENDPOINT_BYTES );
             } catch ( \Throwable $e ) {
                 return 'graphql';
             }
         }
 
         return 'graphql';
+    }
+
+    private static function limit_static_string( string $value, int $max_bytes ): string
+    {
+        return strlen( $value ) <= $max_bytes ? $value : substr( $value, 0, $max_bytes );
     }
 
     /**
@@ -148,6 +146,9 @@ class GraphQL implements Instrumentor
     private function register_db_hooks(): void
     {
         $this->db_hook_callback = function ($query_data, $query, $query_time, $query_callstack, $query_start) {
+            if ( $this->collector->is_stopped() ) {
+                return $query_data;
+            }
             $query_string = is_scalar( $query ) || ( is_object( $query ) && method_exists( $query, '__toString' ) )
                 ? (string) $query
                 : '';
@@ -177,30 +178,25 @@ class GraphQL implements Instrumentor
 
     private function register_operation_hooks(): void
     {
+        // Current WPGraphQL operation hook (one call per parsed operation).
+        add_action('do_graphql_request', function ( $query, $operation ) {
+            $this->current_operation_hook_seen = true;
+            $this->start_operation( $query, $operation );
+        }, 10, 2);
+
+        // Compatibility hook for older WPGraphQL releases. Avoid a duplicate
+        // span if both generations of hooks fire for one operation.
         add_action('graphql_process_request', function ($wp_graphql) {
             try {
-                $query = Config::string_value( $wp_graphql->get_query(), '' );
-                $operation_name = $this->limit_string(
-                    Config::string_value( $wp_graphql->get_operation_name(), 'anonymous' ),
-                    self::MAX_OPERATION_NAME_BYTES
-                );
-                $operation_name = $operation_name !== '' ? $operation_name : 'anonymous';
-                $this->operation_span_id = $this->collector->start_span(
-                    "GraphQL: {$operation_name}",
-                    Span::TYPE_CORE,
-                    'wpgraphql'
-                );
-                $meta = [
-                    'graphql_operation' => $operation_name,
-                    'graphql_query_length' => strlen($query),
-                ];
-                if ( $this->full_graphql_query ) {
-                    $meta['graphql_query'] = $this->limit_string( $query, self::MAX_GRAPHQL_QUERY_BYTES );
-                    if ( strlen( $query ) > self::MAX_GRAPHQL_QUERY_BYTES ) {
-                        $meta['graphql_query_truncated'] = true;
-                    }
+                if ( $this->collector->is_stopped() ) {
+                    return;
                 }
-                $this->collector->add_span_meta($this->operation_span_id, $meta);
+                if ( $this->current_operation_hook_seen && ! empty( $this->operation_span_stack ) ) {
+                    return;
+                }
+                $query = is_object( $wp_graphql ) && method_exists( $wp_graphql, 'get_query' ) ? $wp_graphql->get_query() : '';
+                $operation = is_object( $wp_graphql ) && method_exists( $wp_graphql, 'get_operation_name' ) ? $wp_graphql->get_operation_name() : '';
+                $this->start_operation( $query, $operation );
             } catch (\Throwable $e) {
                 // Don't break GraphQL processing
             }
@@ -208,9 +204,8 @@ class GraphQL implements Instrumentor
 
         add_filter('graphql_return_response', function ($response) {
             try {
-                if ($this->operation_span_id !== null) {
-                    $this->collector->end_span($this->operation_span_id);
-                    $this->operation_span_id = null;
+                if ( ! empty( $this->operation_span_stack ) ) {
+                    $this->collector->end_span( array_pop( $this->operation_span_stack ) );
                 }
             } catch (\Throwable $e) {
                 // Don't break GraphQL response
@@ -219,28 +214,72 @@ class GraphQL implements Instrumentor
         }, 10, 1);
     }
 
+    /**
+     * @param mixed $query
+     * @param mixed $operation
+     */
+    private function start_operation( $query, $operation ): void
+    {
+        if ( $this->collector->is_stopped() ) {
+            return;
+        }
+
+        $query = Config::string_value( $query, '' );
+        $operation_name = $this->limit_string( Config::string_value( $operation, 'anonymous' ), self::MAX_OPERATION_NAME_BYTES );
+        $operation_name = $operation_name !== '' ? $operation_name : 'anonymous';
+        $GLOBALS['wp_flame_graphql_operation_name'] = $operation_name;
+        $operation_span_id = $this->collector->start_span( "GraphQL: {$operation_name}", Span::TYPE_CORE, 'wpgraphql' );
+        if ( $operation_span_id !== '' ) {
+            $this->operation_span_stack[] = $operation_span_id;
+        }
+        $meta = [
+            'graphql_operation'    => $operation_name,
+            'graphql_query_length' => strlen( $query ),
+        ];
+        if ( $this->full_graphql_query ) {
+            $meta['graphql_query'] = $this->limit_string( $query, self::MAX_GRAPHQL_QUERY_BYTES );
+            if ( strlen( $query ) > self::MAX_GRAPHQL_QUERY_BYTES ) {
+                $meta['graphql_query_truncated'] = true;
+            }
+        }
+        $this->collector->add_span_meta( $operation_span_id, $meta );
+    }
+
     private function register_resolver_hooks(): void
     {
         add_filter('graphql_pre_resolve_field', function ($default, $source, $args, $context, $info, $type_name, $field_key, $field, $field_resolver) {
             try {
+                if ( $this->collector->is_stopped() ) {
+                    return $default;
+                }
                 $type_name = $this->limit_string( Config::string_value( $type_name, '' ), self::MAX_RESOLVER_NAME_BYTES );
                 $field_key = $this->limit_string( Config::string_value( $field_key, '' ), self::MAX_RESOLVER_NAME_BYTES );
                 if ( $field_key === '' || ! in_array(strtolower($type_name), self::ROOT_TYPES, true)) {
                     return $default;
                 }
 
+                $key = strtolower($type_name) . '.' . $field_key;
+                $resolver_source = [
+                    'type'   => Span::TYPE_PLUGIN,
+                    'source' => 'wpgraphql',
+                ];
+                $resolver_name = '';
+                if ( is_callable( $field_resolver ) ) {
+                    $resolver_source = CallbackResolver::resolve_source( 'graphql:' . $key, $field_resolver, $this->collector );
+                    $resolver_name   = CallbackResolver::resolve_name( 'graphql:' . $key, $field_resolver );
+                }
+
                 $span_id = $this->collector->start_span(
                     "{$type_name}.{$field_key}",
-                    Span::TYPE_PLUGIN,
-                    'wpgraphql',
+                    Config::string_value( $resolver_source['type'] ?? Span::TYPE_PLUGIN, Span::TYPE_PLUGIN ),
+                    Config::string_value( $resolver_source['source'] ?? 'wpgraphql', 'wpgraphql' ),
                     [
                         'type_name' => $type_name,
                         'field_key' => $field_key,
                         'hook'      => "graphql:{$type_name}.{$field_key}",
-                    ]
+                    ] + ( $resolver_name !== '' ? [ 'callback' => $this->limit_string( $resolver_name, self::MAX_RESOLVER_NAME_BYTES ) ] : [] )
                 );
 
-                $key = strtolower($type_name) . '.' . $field_key;
                 $this->resolver_span_stacks[$key][] = $span_id;
             } catch (\Throwable $e) {
                 // Don't break field resolution
@@ -250,6 +289,9 @@ class GraphQL implements Instrumentor
 
         add_filter('graphql_resolve_field', function ($result, $source, $args, $context, $info, $type_name, $field_key, $field, $field_resolver) {
             try {
+                if ( $this->collector->is_stopped() ) {
+                    return $result;
+                }
                 $type_name = $this->limit_string( Config::string_value( $type_name, '' ), self::MAX_RESOLVER_NAME_BYTES );
                 $field_key = $this->limit_string( Config::string_value( $field_key, '' ), self::MAX_RESOLVER_NAME_BYTES );
                 if ( $field_key === '' || ! in_array(strtolower($type_name), self::ROOT_TYPES, true)) {

@@ -56,6 +56,10 @@ class Http implements Instrumentor
      */
     public function on_pre_request($preempt, $parsed_args, $url)
     {
+        if ( $this->collector->is_stopped() ) {
+            return $preempt;
+        }
+
         if ( false !== $preempt ) {
             return $preempt;
         }
@@ -69,11 +73,17 @@ class Http implements Instrumentor
         $parsed = parse_url($url_string);
         $host = is_array($parsed) ? $this->limit_string( $this->string_value( $parsed['host'] ?? 'unknown', 'unknown' ), self::MAX_HOST_BYTES ) : 'unknown';
 
+        $caller = $this->get_caller_context();
+        $meta = $this->build_request_meta( $url_string, $method, $host );
+        if ( $caller['caller_file'] !== '' ) {
+            $meta['caller_file'] = $caller['caller_file'];
+            $meta['caller_line'] = $caller['caller_line'];
+        }
         $span_id = $this->collector->start_span(
             'HTTP ' . $host,
             Span::TYPE_HTTP,
-            $this->get_caller_source(),
-            $this->build_request_meta( $url_string, $method, $host )
+            $caller['source'],
+            $meta
         );
         if ( $span_id === '' ) {
             return $preempt;
@@ -99,6 +109,10 @@ class Http implements Instrumentor
      */
     public function on_response($response, $parsed_args, $url)
     {
+        if ( $this->collector->is_stopped() ) {
+            return $response;
+        }
+
         $url_string = $this->limit_string( $this->string_value( $url, '' ), self::MAX_URL_BYTES );
         $method = $this->normalize_method( $parsed_args );
         $key = $this->request_key( $url_string, $method );
@@ -140,6 +154,10 @@ class Http implements Instrumentor
      */
     public function on_http_debug( $response, $context, $class, $parsed_args, $url ): void
     {
+        if ( $this->collector->is_stopped() ) {
+            return;
+        }
+
         if ( $context !== 'response' ) {
             return;
         }
@@ -185,9 +203,10 @@ class Http implements Instrumentor
     /**
      * Determine the source of the HTTP request via backtrace.
      */
-    private function get_caller_source(): string
+    /** @return array{source: string, caller_file: string, caller_line: int} */
+    private function get_caller_context(): array
     {
-        return SourceResolver::from_backtrace( $this->collector, 1 );
+        return SourceResolver::from_backtrace_context( $this->collector, 1 );
     }
 
     private function build_request_meta( string $url, string $method, string $host ): array

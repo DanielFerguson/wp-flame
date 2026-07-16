@@ -84,7 +84,7 @@ class DBTest extends WP_UnitTestCase
         $collector->start_request(microtime(true));
 
         $db = DB::from_wpdb($wpdb, $collector);
-        $db->query('SELECT * FROM wp_posts LIMIT 1');
+        $db->query("SELECT * FROM {$wpdb->posts} LIMIT 1");
 
         $trace = $collector->get_trace();
         $db_spans = array_values(array_filter($trace->spans, fn(Span $s) => $s->type === Span::TYPE_DB));

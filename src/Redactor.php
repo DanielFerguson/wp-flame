@@ -17,6 +17,7 @@ class Redactor
     private const MAX_PATH_BYTES = 2048;
     private const MAX_QUERY_BYTES = 4096;
     private const MAX_QUERY_PARAMS = 50;
+    private const MAX_QUERY_ARRAY_DEPTH = 2;
     private const MAX_SQL_NORMALIZE_BYTES = 8192;
     private const DEFAULT_SQL_LABEL_BYTES = 200;
 
@@ -92,6 +93,7 @@ class Redactor
      */
     public static function normalize_sql( string $query ): string
     {
+        $query = self::strip_sql_comments( $query );
         if ( strlen( $query ) > self::MAX_SQL_NORMALIZE_BYTES ) {
             $query = substr( $query, 0, self::MAX_SQL_NORMALIZE_BYTES ) . ' /* wp_flame_truncated */';
         }
@@ -108,6 +110,7 @@ class Redactor
 
     public static function sql_label( string $query, bool $full_query_text ): string
     {
+        $query = self::strip_sql_comments( $query );
         if ( $full_query_text ) {
             return self::limit_bytes( $query, self::MAX_SQL_LABEL_BYTES );
         }
@@ -119,12 +122,16 @@ class Redactor
      * @param mixed $value
      * @return mixed
      */
-    private static function redact_query_value( string $key, $value )
+    private static function redact_query_value( string $key, $value, int $depth = 0 )
     {
         if ( is_array( $value ) ) {
+            if ( $depth >= self::MAX_QUERY_ARRAY_DEPTH ) {
+                return self::REDACTED;
+            }
+
             $redacted = [];
             foreach ( $value as $nested_key => $nested_value ) {
-                $redacted[ $nested_key ] = self::redact_query_value( $key, $nested_value );
+                $redacted[ $nested_key ] = self::redact_query_value( $key, $nested_value, $depth + 1 );
             }
             return $redacted;
         }
@@ -144,15 +151,17 @@ class Redactor
     private static function redact_path( string $path ): string
     {
         $segments = explode( '/', $path );
+        $sensitive_parent = false;
         foreach ( $segments as $index => $segment ) {
             if ( $segment === '' ) {
                 continue;
             }
 
             $decoded = rawurldecode( $segment );
-            if ( self::is_sensitive_path_segment( $decoded ) ) {
+            if ( $sensitive_parent || self::is_sensitive_path_segment( $decoded ) ) {
                 $segments[ $index ] = self::REDACTED;
             }
+            $sensitive_parent = self::is_identity_parent_segment( $decoded );
         }
 
         $redacted_path = implode( '/', $segments );
@@ -165,7 +174,97 @@ class Redactor
             return true;
         }
 
-        return (bool) preg_match( '/^(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9_-]{24,}$/', $segment );
+        return (bool) preg_match( '/^\d+$/', $segment )
+            || (bool) preg_match( '/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i', $segment )
+            || (bool) preg_match( '/^(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9_-]{16,}$/', $segment );
+    }
+
+    private static function is_identity_parent_segment( string $segment ): bool
+    {
+        return in_array(
+            strtolower( $segment ),
+            [
+                'account',
+                'accounts',
+                'booking',
+                'bookings',
+                'customer',
+                'customers',
+                'download',
+                'downloads',
+                'invoice',
+                'invoices',
+                'member',
+                'members',
+                'order',
+                'orders',
+                'profile',
+                'profiles',
+                'reset',
+                'token',
+                'user',
+                'users',
+                'verify',
+            ],
+            true
+        );
+    }
+
+    /**
+     * Remove SQL comments without treating comment markers inside quoted
+     * strings or identifiers as comments.
+     */
+    public static function strip_sql_comments( string $query ): string
+    {
+        $query = self::limit_bytes( $query, self::MAX_SQL_NORMALIZE_BYTES );
+        $length = strlen( $query );
+        $output = '';
+        $quote = '';
+        for ( $index = 0; $index < $length; $index++ ) {
+            $char = $query[ $index ];
+            $next = $index + 1 < $length ? $query[ $index + 1 ] : '';
+            if ( $quote !== '' ) {
+                $output .= $char;
+                if ( $char === '\\' && $index + 1 < $length ) {
+                    $output .= $query[ ++$index ];
+                } elseif ( $char === $quote ) {
+                    if ( $next === $quote ) {
+                        $output .= $query[ ++$index ];
+                    } else {
+                        $quote = '';
+                    }
+                }
+                continue;
+            }
+
+            if ( in_array( $char, [ "'", '"', '`' ], true ) ) {
+                $quote = $char;
+                $output .= $char;
+                continue;
+            }
+
+            if ( $char === '/' && $next === '*' ) {
+                $index += 2;
+                while ( $index < $length && ! ( $query[ $index ] === '*' && $index + 1 < $length && $query[ $index + 1 ] === '/' ) ) {
+                    $index++;
+                }
+                $index++;
+                $output .= ' ';
+                continue;
+            }
+
+            if ( $char === '#' || ( $char === '-' && $next === '-' && ( $index + 2 >= $length || ctype_space( $query[ $index + 2 ] ) ) ) ) {
+                while ( $index < $length && $query[ $index ] !== "\n" && $query[ $index ] !== "\r" ) {
+                    $index++;
+                }
+                $output .= ' ';
+                continue;
+            }
+
+            $output .= $char;
+        }
+
+        return trim( preg_replace( '/\s+/', ' ', $output ) ?? $output );
     }
 
     private static function safe_query_key( string $key, int $position ): string

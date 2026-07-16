@@ -26,6 +26,7 @@ class Span
     private const MAX_META_KEY_BYTES = 80;
     private const MAX_META_STRING_BYTES = 500;
     private const MAX_GRAPHQL_QUERY_BYTES = 65536;
+    private const MAX_HTTP_URL_BYTES = 2048;
 
     public string $id;
     public ?string $parent_id;
@@ -197,6 +198,10 @@ class Span
 
         if ( $depth === 0 && $key === 'graphql_query' ) {
             return self::MAX_GRAPHQL_QUERY_BYTES;
+        }
+
+        if ( $depth === 0 && $key === 'url' ) {
+            return self::MAX_HTTP_URL_BYTES;
         }
 
         return self::MAX_META_STRING_BYTES;

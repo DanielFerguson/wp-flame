@@ -15,6 +15,7 @@ class SettingsTest extends TestCase
     protected function tearDown(): void
     {
         unset($GLOBALS['wp_flame_test_options']);
+        $_POST = [];
         parent::tearDown();
     }
 
@@ -91,6 +92,26 @@ class SettingsTest extends TestCase
 
         $this->assertSame(Config::MIN_MAX_TRACE_BYTES, Settings::sanitize_max_trace_bytes(0));
         $this->assertSame(Config::MAX_MAX_TRACE_BYTES, Settings::sanitize_max_trace_bytes(Config::MAX_MAX_TRACE_BYTES + 1));
+
+        $this->assertSame(Config::MIN_STORAGE_QUOTA_ROWS, Settings::sanitize_storage_quota_rows(0));
+        $this->assertSame(Config::MAX_STORAGE_QUOTA_ROWS, Settings::sanitize_storage_quota_rows(Config::MAX_STORAGE_QUOTA_ROWS + 1));
+        $this->assertSame(Config::MIN_STORAGE_QUOTA_MB, Settings::sanitize_storage_quota_mb(0));
+        $this->assertSame(Config::MAX_STORAGE_QUOTA_MB, Settings::sanitize_storage_quota_mb(Config::MAX_STORAGE_QUOTA_MB + 1));
+    }
+
+    public function test_sensitive_boolean_requires_explicit_acknowledgement(): void
+    {
+        $this->assertFalse(Settings::sanitize_sensitive_boolean('1'));
+
+        $GLOBALS['wp_flame_test_options'] = ['wp_flame_sensitive_data_acknowledged' => true];
+        $this->assertTrue(Settings::sanitize_sensitive_boolean('1'));
+
+        $_POST['wp_flame_sensitive_data_acknowledged'] = '0';
+        $this->assertFalse(Settings::sanitize_sensitive_boolean('1'));
+
+        $_POST['wp_flame_sensitive_data_acknowledged'] = '1';
+        $this->assertTrue(Settings::sanitize_sensitive_boolean('1'));
+        $this->assertFalse(Settings::sanitize_sensitive_boolean('0'));
     }
 
     public function test_select_setting_sanitizers_normalize_values(): void
@@ -164,6 +185,17 @@ class SettingsTest extends TestCase
         $result = $method->invoke($settings, ['_wpnonce' => str_repeat('n', 3000)], '_wpnonce');
 
         $this->assertSame(2048, strlen($result));
+    }
+
+    public function test_request_string_accepts_contextual_nonce_bounds(): void
+    {
+        $settings = new Settings($this->createMock(Storage::class));
+        $method = new ReflectionMethod(Settings::class, 'request_string');
+        $method->setAccessible(true);
+
+        $result = $method->invoke($settings, ['_wpnonce' => str_repeat('n', 3000)], '_wpnonce', 128);
+
+        $this->assertSame(128, strlen($result));
     }
 
     public function test_numeric_fields_render_defaults_for_malformed_option_values_without_warnings(): void
@@ -264,7 +296,10 @@ class SettingsTest extends TestCase
         }
 
         $this->assertSame([], $warnings);
-        $this->assertSame(['count' => 0, 'size_mb' => '0'], $summary);
+        $this->assertSame(0, $summary['count']);
+        $this->assertSame('0', $summary['size_mb']);
+        $this->assertStringContainsString('available', $summary['quota_label']);
+        $this->assertSame('none', $summary['oldest_expired']);
     }
 
     public function test_storage_summary_formats_bounded_size(): void
@@ -278,7 +313,9 @@ class SettingsTest extends TestCase
             'bytes' => 1572864,
         ]);
 
-        $this->assertSame(['count' => 12, 'size_mb' => '1.5'], $summary);
+        $this->assertSame(12, $summary['count']);
+        $this->assertSame('1.5', $summary['size_mb']);
+        $this->assertStringContainsString('12 / 10000 traces', $summary['quota_label']);
     }
 
     /**
@@ -288,6 +325,7 @@ class SettingsTest extends TestCase
     {
         return [
             'enabled'            => ['wp_flame_enabled', 'render_field_enabled'],
+            'sensitive acknowledgement' => ['wp_flame_sensitive_data_acknowledged', 'render_field_sensitive_data_acknowledged'],
             'sql'                => ['wp_flame_full_query_text', 'render_field_full_query_text'],
             'http'               => ['wp_flame_full_http_url', 'render_field_full_http_url'],
             'graphql'            => ['wp_flame_full_graphql_query', 'render_field_full_graphql_query'],

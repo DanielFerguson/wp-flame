@@ -21,6 +21,7 @@ class Collector
     private int $next_span_id = 0;
     private int $max_spans = 0;
     private int $dropped_span_count = 0;
+    private int $span_close_mismatch_count = 0;
 
     /** @var array[] Lightweight stack entries: [id, name, type, source, start_ms, meta, parent_id, span_count_at_start] */
     private array $span_stack = [];
@@ -58,6 +59,7 @@ class Collector
         $this->stopped = false;
         $this->next_span_id = 0;
         $this->dropped_span_count = 0;
+        $this->span_close_mismatch_count = 0;
         $this->span_stack = [];
         $this->spans = [];
     }
@@ -110,18 +112,9 @@ class Collector
             return;
         }
 
-        if ($this->stopped || empty($this->span_stack)) {
+        $entry = $this->pop_span_entry( $span_id, 'end_span' );
+        if ( $entry === null ) {
             return;
-        }
-
-        $entry = array_pop($this->span_stack);
-
-        if ($span_id !== null && $entry['id'] !== $span_id) {
-            error_log(sprintf(
-                'WP Flame: end_span() ID mismatch — expected "%s", got "%s"',
-                $span_id,
-                $entry['id']
-            ));
         }
 
         $duration_ms = ((microtime(true) - $this->request_start) * 1000) - $entry['start_ms'];
@@ -192,18 +185,9 @@ class Collector
             return;
         }
 
-        if ($this->stopped || empty($this->span_stack)) {
+        $entry = $this->pop_span_entry( $span_id, 'end_span_filtered' );
+        if ( $entry === null ) {
             return;
-        }
-
-        $entry = array_pop($this->span_stack);
-
-        if ($span_id !== null && $entry['id'] !== $span_id) {
-            error_log(sprintf(
-                'WP Flame: end_span_filtered() ID mismatch — expected "%s", got "%s"',
-                $span_id,
-                $entry['id']
-            ));
         }
 
         $duration_ms = ((microtime(true) - $this->request_start) * 1000) - $entry['start_ms'];
@@ -255,12 +239,42 @@ class Collector
         }
     }
 
-    public function get_trace(array $meta = []): Trace
+    /**
+     * @param array<string, mixed> $meta
+     * @param array<string, mixed> $capture_report
+     */
+    public function get_trace(array $meta = [], array $capture_report = []): Trace
     {
         $request_end = $this->request_end > 0.0 ? $this->request_end : microtime(true);
         $total_ms = ($request_end - $this->request_start) * 1000;
         if ($this->dropped_span_count > 0) {
             $meta['wp_flame_dropped_spans'] = $this->dropped_span_count;
+            $capture_report['dropped_span_count'] = $this->dropped_span_count;
+            $capture_report['incomplete_reasons'] = $this->append_incomplete_reason(
+                $capture_report['incomplete_reasons'] ?? [],
+                'dropped_spans'
+            );
+        }
+        if ( $this->span_close_mismatch_count > 0 ) {
+            $meta['wp_flame_span_close_mismatches'] = $this->span_close_mismatch_count;
+            $capture_report['incomplete_reasons'] = $this->append_incomplete_reason(
+                $capture_report['incomplete_reasons'] ?? [],
+                'span_close_mismatch'
+            );
+        }
+
+        $auto_closed_span_count = 0;
+        foreach ( $this->spans as $span ) {
+            if ( ! empty( $span->meta['auto_closed'] ) ) {
+                $auto_closed_span_count++;
+            }
+        }
+        if ( $auto_closed_span_count > 0 ) {
+            $capture_report['auto_closed_span_count'] = $auto_closed_span_count;
+            $capture_report['incomplete_reasons'] = $this->append_incomplete_reason(
+                $capture_report['incomplete_reasons'] ?? [],
+                'auto_closed_spans'
+            );
         }
 
         $request_uri = isset($_SERVER['REQUEST_URI'])
@@ -280,8 +294,62 @@ class Collector
             PHP_VERSION,
             function_exists('get_bloginfo') ? get_bloginfo('version', 'raw') : '',
             $this->spans,
-            $meta
+            $meta,
+            $capture_report
         );
+    }
+
+    public function request_start(): float
+    {
+        return $this->request_start;
+    }
+
+    public function is_stopped(): bool
+    {
+        return $this->stopped;
+    }
+
+    /**
+     * @param mixed $reasons
+     * @return array<int, mixed>
+     */
+    private function append_incomplete_reason( $reasons, string $reason ): array
+    {
+        $reasons = is_array( $reasons ) ? array_values( $reasons ) : [];
+        if ( ! in_array( $reason, $reasons, true ) ) {
+            $reasons[] = $reason;
+        }
+
+        return $reasons;
+    }
+
+    /**
+     * Pop only the requested top-of-stack span. An out-of-order or unknown ID
+     * is recorded as incomplete capture evidence and leaves the stack intact.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function pop_span_entry( ?string $span_id, string $operation ): ?array
+    {
+        if ( $this->stopped || empty( $this->span_stack ) ) {
+            return null;
+        }
+
+        $top_index = count( $this->span_stack ) - 1;
+        $top = $this->span_stack[ $top_index ];
+        if ( $span_id === null || $top['id'] === $span_id ) {
+            return array_pop( $this->span_stack );
+        }
+
+        $this->span_close_mismatch_count++;
+        error_log( sprintf(
+            'WP Flame: %s() refused out-of-order span close — requested "%s", open top is "%s"',
+            $operation,
+            $span_id,
+            $top['id']
+        ) );
+
+        return null;
     }
 
     public function add_span_meta(string $span_id, array $additional_meta): void
@@ -361,28 +429,53 @@ class Collector
         $result = ['type' => Span::TYPE_PHP, 'source' => basename($file_path)];
 
         // Check if file is in a plugin
-        $plugin_dir = self::directory_constant('WP_PLUGIN_DIR');
-        $mu_plugin_dir = self::directory_constant('WPMU_PLUGIN_DIR');
-        $template_dir = function_exists('get_template_directory') ? Config::string_value(get_template_directory(), '') : '';
-        $abspath = self::directory_constant('ABSPATH');
+        $plugin_dir     = self::directory_constant( 'WP_PLUGIN_DIR' );
+        $mu_plugin_dir  = self::directory_constant( 'WPMU_PLUGIN_DIR' );
+        $content_dir    = self::directory_constant( 'WP_CONTENT_DIR' );
+        $template_dir   = function_exists( 'get_template_directory' ) ? Config::string_value( get_template_directory(), '' ) : '';
+        $stylesheet_dir = function_exists( 'get_stylesheet_directory' ) ? Config::string_value( get_stylesheet_directory(), '' ) : '';
+        $abspath        = self::directory_constant( 'ABSPATH' );
 
-        if ($plugin_dir !== '' && self::path_is_inside_directory($file_path, $plugin_dir)) {
-            $relative = substr($file_path, strlen($plugin_dir) + 1);
-            $parts = explode('/', $relative, 2);
-            $result = ['type' => Span::TYPE_PLUGIN, 'source' => $parts[0]];
+        if ( $content_dir === '' && $abspath !== '' ) {
+            $content_dir = rtrim( $abspath, '/\\' ) . '/wp-content';
         }
-        // Check if file is in mu-plugins
-        elseif ($mu_plugin_dir !== '' && self::path_is_inside_directory($file_path, $mu_plugin_dir)) {
-            $relative = substr($file_path, strlen($mu_plugin_dir) + 1);
-            $result = ['type' => Span::TYPE_PLUGIN, 'source' => 'mu:' . explode('/', $relative, 2)[0]];
-        }
-        // Check if file is in a theme
-        elseif ($template_dir !== '' && self::path_is_inside_directory($file_path, $template_dir)) {
-            $result = ['type' => Span::TYPE_THEME, 'source' => basename($template_dir)];
-        }
-        // Check if file is WordPress core
-        elseif ($abspath !== '' && self::path_is_inside_directory($file_path, $abspath)) {
-            $result = ['type' => Span::TYPE_CORE, 'source' => 'wordpress'];
+
+        if ( $content_dir !== '' && self::is_supported_drop_in( $file_path, $content_dir ) ) {
+            $result = [
+                'type'   => Span::TYPE_PLUGIN,
+                'source' => 'drop-in:' . basename( $file_path, '.php' ),
+            ];
+            // Check mu-plugins before regular plugins in case a site uses custom overlapping roots.
+        } elseif ( $mu_plugin_dir !== '' && self::path_is_inside_directory( $file_path, $mu_plugin_dir ) ) {
+            $relative = substr( $file_path, strlen( $mu_plugin_dir ) + 1 );
+            $result = [
+                'type'   => Span::TYPE_PLUGIN,
+                'source' => 'mu-plugin:' . explode( '/', $relative, 2 )[0],
+            ];
+        } elseif ( $plugin_dir !== '' && self::path_is_inside_directory( $file_path, $plugin_dir ) ) {
+            $relative = substr( $file_path, strlen( $plugin_dir ) + 1 );
+            $parts = explode( '/', $relative, 2 );
+            $result = [
+                'type'   => Span::TYPE_PLUGIN,
+                'source' => $parts[0],
+            ];
+            // A child theme lives outside get_template_directory(), so test it first.
+        } elseif ( $stylesheet_dir !== '' && $stylesheet_dir !== $template_dir && self::path_is_inside_directory( $file_path, $stylesheet_dir ) ) {
+            $result = [
+                'type'   => Span::TYPE_THEME,
+                'source' => 'child-theme:' . basename( $stylesheet_dir ),
+            ];
+        } elseif ( $template_dir !== '' && self::path_is_inside_directory( $file_path, $template_dir ) ) {
+            $result = [
+                'type'   => Span::TYPE_THEME,
+                'source' => 'parent-theme:' . basename( $template_dir ),
+            ];
+            // Check if file is WordPress core.
+        } elseif ( $abspath !== '' && self::path_is_inside_directory( $file_path, $abspath ) ) {
+            $result = [
+                'type'   => Span::TYPE_CORE,
+                'source' => 'wordpress',
+            ];
         }
 
         if ( count( self::$source_cache ) < self::MAX_SOURCE_CACHE_ENTRIES ) {
@@ -407,5 +500,16 @@ class Collector
         $directory = rtrim(str_replace('\\', '/', $directory), '/');
 
         return $path === $directory || strpos($path, $directory . '/') === 0;
+    }
+
+    private static function is_supported_drop_in( string $file_path, string $content_dir ): bool
+    {
+        $file_path   = str_replace( '\\', '/', $file_path );
+        $content_dir = rtrim( str_replace( '\\', '/', $content_dir ), '/' );
+        if ( dirname( $file_path ) !== $content_dir ) {
+            return false;
+        }
+
+        return in_array( basename( $file_path ), [ 'advanced-cache.php', 'db.php', 'object-cache.php', 'sunrise.php' ], true );
     }
 }

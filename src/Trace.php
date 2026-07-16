@@ -10,6 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class Trace
 {
+    public const SCHEMA_VERSION = 2;
     private const MAX_TRACE_ID_BYTES = 128;
     private const MAX_URL_BYTES = 2048;
     private const MAX_METHOD_BYTES = 20;
@@ -37,9 +38,13 @@ class Trace
     /** @var Span[] */
     public array $spans;
     public array $meta;
+    public CaptureReport $capture_report;
+    /** @var array<string, mixed>|null */
+    public ?array $score_snapshot = null;
 
     /**
-     * @param Span[] $spans
+     * @param Span[]              $spans
+     * @param array<string, mixed> $capture_report
      */
     public function __construct(
         string $id,
@@ -51,7 +56,8 @@ class Trace
         string $php_version,
         string $wp_version,
         array $spans,
-        array $meta = []
+        array $meta = [],
+        array $capture_report = []
     ) {
         $spans = self::normalize_spans( $spans );
 
@@ -65,6 +71,7 @@ class Trace
         $this->wp_version  = self::limit_string( $wp_version, self::MAX_VERSION_BYTES );
         $this->spans       = $spans;
         $this->meta        = self::normalize_meta( $meta );
+        $this->capture_report = new CaptureReport( $capture_report, $this->total_ms );
 
         // Compute query aggregates from DB-type spans
         $this->query_count    = 0;
@@ -100,8 +107,8 @@ class Trace
 
     public function toArray(): array
     {
-        return [
-            'v'              => 1,
+        $data = array_merge( [
+            'v'              => self::SCHEMA_VERSION,
             'id'             => $this->id,
             'url'            => $this->url,
             'method'         => $this->method,
@@ -114,7 +121,12 @@ class Trace
             'total_query_ms' => $this->total_query_ms,
             'spans'          => $this->spans_to_array(),
             'meta'           => $this->meta,
-        ];
+        ], $this->capture_report->to_array() );
+        if ( $this->score_snapshot !== null ) {
+            $data['score_snapshot'] = $this->score_snapshot;
+        }
+
+        return $data;
     }
 
     private function spans_to_array(): array
@@ -148,7 +160,6 @@ class Trace
     public static function fromArray(array $data): self
     {
         $version = self::int_value( $data['v'] ?? 1, 1 );
-        // Future: if ( $version < 2 ) { $data = self::migrate_v1_to_v2( $data ); }
 
         $span_rows = isset( $data['spans'] ) && is_array( $data['spans'] ) ? $data['spans'] : [];
         $spans = [];
@@ -162,18 +173,27 @@ class Trace
             }
         }
 
+        $meta = isset( $data['meta'] ) && is_array( $data['meta'] ) ? self::normalize_meta( $data['meta'] ) : [];
+        $total_ms = self::float_value( $data['observed_duration_ms'] ?? $data['total_ms'] ?? 0, 0.0 );
+        $capture_report = CaptureReport::from_trace_data( $data, $total_ms, $meta, $spans, $version < self::SCHEMA_VERSION );
+
         $trace = new self(
             self::limit_string( self::string_value( $data['id'] ?? '', '' ), self::MAX_TRACE_ID_BYTES ),
             self::limit_string( self::string_value( $data['url'] ?? '', '' ), self::MAX_URL_BYTES ),
             self::limit_string( self::string_value( $data['method'] ?? 'GET', 'GET' ), self::MAX_METHOD_BYTES ),
             self::limit_string( self::string_value( $data['timestamp'] ?? '', '' ), self::MAX_TIMESTAMP_BYTES ),
-            self::float_value( $data['total_ms'] ?? 0, 0.0 ),
+            $total_ms,
             self::int_value( $data['peak_memory'] ?? 0, 0 ),
             self::limit_string( self::string_value( $data['php_version'] ?? '', '' ), self::MAX_VERSION_BYTES ),
             self::limit_string( self::string_value( $data['wp_version'] ?? '', '' ), self::MAX_VERSION_BYTES ),
             $spans,
-            isset( $data['meta'] ) && is_array( $data['meta'] ) ? self::normalize_meta( $data['meta'] ) : []
+            $meta,
+            $capture_report->to_array()
         );
+
+        if ( isset( $data['score_snapshot'] ) && is_array( $data['score_snapshot'] ) ) {
+            $trace->set_score_snapshot( $data['score_snapshot'] );
+        }
 
         if ( array_key_exists( 'query_count', $data ) ) {
             $trace->query_count = min( self::MAX_QUERY_COUNT, max( 0, self::int_value( $data['query_count'], 0 ) ) );
@@ -183,6 +203,13 @@ class Trace
         }
 
         return $trace;
+    }
+
+    /** @param array<string, mixed> $snapshot */
+    public function set_score_snapshot( array $snapshot ): void
+    {
+        $normalized = Score::normalize_snapshot( $snapshot );
+        $this->score_snapshot = $normalized !== null ? $normalized : null;
     }
 
     /**

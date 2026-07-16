@@ -16,6 +16,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class HttpDuringEarlyPhases implements InsightRule
 {
+    private const MAX_URL_BYTES = 8192;
+    private const MAX_HOST_BYTES = 255;
+
     public function id(): string
     {
         return 'http_during_early_phases';
@@ -61,11 +64,13 @@ class HttpDuringEarlyPhases implements InsightRule
                 continue;
             }
 
-            $url  = Config::string_value( $span->meta['url'] ?? '', '' );
-            $host = Config::string_value( $span->meta['host'] ?? '', '' );
+            $url  = $this->limit_string( Config::string_value( $span->meta['url'] ?? '', '' ), self::MAX_URL_BYTES );
+            $host = $this->limit_string( Config::string_value( $span->meta['host'] ?? '', '' ), self::MAX_HOST_BYTES );
             if ($host === '' && $url !== '') {
                 $parsed = parse_url($url);
-                $host   = is_array($parsed) ? ($parsed['host'] ?? $url) : $url;
+                $host   = is_array($parsed)
+                    ? $this->limit_string( Config::string_value( $parsed['host'] ?? $url, $url ), self::MAX_HOST_BYTES )
+                    : $this->limit_string( $url, self::MAX_HOST_BYTES );
             }
             if ($host === '') {
                 $host = 'unknown';
@@ -75,7 +80,7 @@ class HttpDuringEarlyPhases implements InsightRule
                 $this->id(),
                 'warning',
                 /* translators: %s: WordPress lifecycle phase name (e.g. Init, Plugin Load) */
-                sprintf(__('HTTP request during %s blocks page load', 'wp-flame'), $phase),
+                sprintf(__('HTTP request during %s delays observed execution', 'wp-flame'), $phase),
                 /* translators: 1: hostname, 2: WordPress lifecycle phase name */
                 sprintf(__('%1$s called during %2$s — consider deferring to a later hook or using a transient.', 'wp-flame'), $host, $phase),
                 [$span->id]
@@ -119,5 +124,14 @@ class HttpDuringEarlyPhases implements InsightRule
         }
 
         return null;
+    }
+
+    private function limit_string( string $value, int $max_bytes ): string
+    {
+        if ( strlen( $value ) <= $max_bytes ) {
+            return $value;
+        }
+
+        return substr( $value, 0, $max_bytes );
     }
 }

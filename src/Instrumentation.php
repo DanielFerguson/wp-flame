@@ -11,7 +11,13 @@ if ( ! defined( 'ABSPATH' ) ) {
 class Instrumentation
 {
     public const FORCE_TRACE_NONCE_ACTION = 'wp_flame_force_trace';
+    public const CAPTURE_SESSION_NONCE_PREFIX = 'wp_flame_capture_session_';
+    private const MAX_FORCE_TRACE_NONCE_BYTES = 128;
+    private const MAX_FORCE_TRACE_COOKIE_DELETE_PATHS = 4;
+    private const MAX_COOKIE_PATH_BYTES = 256;
+    private const MAX_COOKIE_DOMAIN_BYTES = 253;
     private const MAX_NOTICE_TRACE_ID_BYTES = 128;
+    private const MAX_CAPTURE_SESSION_COOKIE_BYTES = 180;
 
     /**
      * Decide whether this request should pay the full instrumentation cost.
@@ -26,11 +32,15 @@ class Instrumentation
         bool $can_manage_options,
         int $sample_roll = 1
     ): bool {
+        if ( $force_trace ) {
+            return true;
+        }
+
         if ( ! $enabled ) {
             return false;
         }
 
-        if ( $force_trace || $is_cron ) {
+        if ( $is_cron ) {
             return true;
         }
 
@@ -140,7 +150,55 @@ class Instrumentation
             return false;
         }
 
+        if ( strlen( $nonce ) > self::MAX_FORCE_TRACE_NONCE_BYTES ) {
+            return false;
+        }
+
         return (bool) $verify_nonce( $nonce );
+    }
+
+    /**
+     * Validate a bounded, administrator-bound capture-session cookie.
+     *
+     * The returned session ID is only an identifier. Callers must still load
+     * the server-side session and check its status, expiry, and request quota.
+     *
+     * @param mixed    $cookie_value
+     * @param callable $verify_nonce Receives nonce and session-specific action.
+     */
+    public static function capture_session_id_from_cookie(
+        $cookie_value,
+        bool $is_logged_in,
+        bool $can_manage_options,
+        callable $verify_nonce
+    ): string {
+        if ( ! $is_logged_in || ! $can_manage_options || ! is_scalar( $cookie_value ) ) {
+            return '';
+        }
+
+        $value = trim( (string) $cookie_value );
+        if ( $value === '' || strlen( $value ) > self::MAX_CAPTURE_SESSION_COOKIE_BYTES ) {
+            return '';
+        }
+
+        $separator = strpos( $value, '.' );
+        if ( $separator === false ) {
+            return '';
+        }
+
+        $session_id = substr( $value, 0, $separator );
+        $nonce = substr( $value, $separator + 1 );
+        if (
+            ! preg_match( '/^[a-f0-9-]{36}$/i', $session_id )
+            || $nonce === ''
+            || strlen( $nonce ) > self::MAX_FORCE_TRACE_NONCE_BYTES
+        ) {
+            return '';
+        }
+
+        $action = self::CAPTURE_SESSION_NONCE_PREFIX . strtolower( $session_id );
+
+        return (bool) $verify_nonce( $nonce, $action ) ? strtolower( $session_id ) : '';
     }
 
     /**
@@ -154,6 +212,11 @@ class Instrumentation
         $options = [];
         $seen    = [];
         $domain  = trim( $domain );
+        if ( strlen( $domain ) > self::MAX_COOKIE_DOMAIN_BYTES ) {
+            $domain = '';
+        }
+        $domains = $domain !== '' ? [ $domain, '' ] : [ '' ];
+        $path_count = 0;
 
         foreach ( $paths as $path ) {
             $path = is_string( $path ) ? trim( $path ) : '';
@@ -165,19 +228,31 @@ class Instrumentation
                 $path = '/' . $path;
             }
 
+            if ( strlen( $path ) > self::MAX_COOKIE_PATH_BYTES ) {
+                continue;
+            }
+
             if ( isset( $seen[ $path ] ) ) {
                 continue;
             }
 
             $seen[ $path ] = true;
-            $options[] = [
-                'expires'  => time() - 3600,
-                'path'     => $path,
-                'domain'   => $domain,
-                'secure'   => $secure,
-                'httponly' => true,
-                'samesite' => 'Strict',
-            ];
+            $path_count++;
+
+            foreach ( $domains as $delete_domain ) {
+                $options[] = [
+                    'expires'  => time() - 3600,
+                    'path'     => $path,
+                    'domain'   => $delete_domain,
+                    'secure'   => $secure,
+                    'httponly' => true,
+                    'samesite' => 'Strict',
+                ];
+            }
+
+            if ( $path_count >= self::MAX_FORCE_TRACE_COOKIE_DELETE_PATHS ) {
+                break;
+            }
         }
 
         return $options;
@@ -190,6 +265,9 @@ class Instrumentation
      */
     public static function notice_trace_id( $value ): string
     {
+        if ( ! is_string( $value ) ) {
+            return '';
+        }
         $trace_id = trim( Config::string_value( $value, '' ) );
         if ( $trace_id === '' ) {
             return '';
@@ -251,46 +329,62 @@ class Instrumentation
 
         $cache_vars = get_object_vars( $cache );
 
-        return [
-            'cache_hits'    => Config::bounded_int( $cache_vars['cache_hits'] ?? 0, 0, 0, PHP_INT_MAX ),
-            'cache_misses'  => Config::bounded_int( $cache_vars['cache_misses'] ?? 0, 0, 0, PHP_INT_MAX ),
-            'cache_backend' => get_class( $cache ),
-        ];
+        $meta = [ 'cache_backend' => get_class( $cache ) ];
+        if ( array_key_exists( 'cache_hits', $cache_vars ) ) {
+            $meta['cache_hits'] = Config::bounded_int( $cache_vars['cache_hits'], 0, 0, PHP_INT_MAX );
+        }
+        if ( array_key_exists( 'cache_misses', $cache_vars ) ) {
+            $meta['cache_misses'] = Config::bounded_int( $cache_vars['cache_misses'], 0, 0, PHP_INT_MAX );
+        }
+
+        return $meta;
     }
 
     /**
      * Register instrumentors with GraphQL/DB mutual exclusion.
      *
      * @param Instrumentor[] $instrumentors
-     * @return array{graphql_active: bool, registered: array<int, string>}
+     * @param callable|null $define_savequeries Enables SAVEQUERIES and returns whether it is active.
+     * @return array{graphql_active: bool, graphql_db_active: bool, registered: array<int, string>, statuses: array<string, string>}
      */
     public static function register_instrumentors(
         array $instrumentors,
         Collector $collector,
         ?callable $define_savequeries = null
     ): array {
-        $graphql_active = false;
-        $registered     = [];
+        $graphql_active    = false;
+        $graphql_db_active = false;
+        $registered        = [];
+        $statuses          = [];
 
         foreach ( $instrumentors as $instrumentor ) {
             if ( ! ( $instrumentor instanceof GraphQL ) ) {
                 continue;
             }
 
-            if ( ! self::instrumentor_is_applicable( $instrumentor ) ) {
+            $applicability = self::instrumentor_applicability( $instrumentor );
+            if ( $applicability !== 'applicable' ) {
+                $statuses[ get_class( $instrumentor ) ] = $applicability;
                 continue;
             }
 
             $requires_savequeries = ! method_exists( $instrumentor, 'requires_savequeries' )
                 || $instrumentor->requires_savequeries();
 
-            if ( $define_savequeries !== null && $requires_savequeries ) {
-                $define_savequeries();
+            $savequeries_active = false;
+            if ( $requires_savequeries ) {
+                $savequeries_active = $define_savequeries !== null
+                    ? (bool) $define_savequeries()
+                    : ( defined( 'SAVEQUERIES' ) && SAVEQUERIES );
             }
 
             if ( self::register_instrumentor( $instrumentor, $collector ) ) {
-                $graphql_active = true;
-                $registered[]   = get_class( $instrumentor );
+                $graphql_active    = true;
+                $graphql_db_active = $requires_savequeries && $savequeries_active;
+                $registered[]      = get_class( $instrumentor );
+                $statuses[ get_class( $instrumentor ) ] = 'registered';
+            } else {
+                $statuses[ get_class( $instrumentor ) ] = 'failed';
             }
         }
 
@@ -303,32 +397,40 @@ class Instrumentation
                 continue;
             }
 
-            if ( $instrumentor instanceof DbInstrumentor && $graphql_active ) {
+            if ( $instrumentor instanceof DbInstrumentor && $graphql_db_active ) {
+                $statuses[ get_class( $instrumentor ) ] = 'superseded';
                 continue;
             }
 
-            if ( ! self::instrumentor_is_applicable( $instrumentor ) ) {
+            $applicability = self::instrumentor_applicability( $instrumentor );
+            if ( $applicability !== 'applicable' ) {
+                $statuses[ get_class( $instrumentor ) ] = $applicability;
                 continue;
             }
 
             if ( self::register_instrumentor( $instrumentor, $collector ) ) {
                 $registered[] = get_class( $instrumentor );
+                $statuses[ get_class( $instrumentor ) ] = 'registered';
+            } else {
+                $statuses[ get_class( $instrumentor ) ] = 'failed';
             }
         }
 
         return [
-            'graphql_active' => $graphql_active,
-            'registered'     => $registered,
+            'graphql_active'    => $graphql_active,
+            'graphql_db_active' => $graphql_db_active,
+            'registered'        => $registered,
+            'statuses'          => $statuses,
         ];
     }
 
-    private static function instrumentor_is_applicable( Instrumentor $instrumentor ): bool
+    private static function instrumentor_applicability( Instrumentor $instrumentor ): string
     {
         try {
-            return $instrumentor->is_applicable();
+            return $instrumentor->is_applicable() ? 'applicable' : 'unavailable';
         } catch ( \Throwable $e ) {
             self::log_instrumentor_failure( 'applicability', $instrumentor, $e );
-            return false;
+            return 'failed';
         }
     }
 

@@ -21,7 +21,7 @@ class CallbackInstrumentorTest extends TestCase
 {
     protected function tearDown(): void
     {
-        unset($GLOBALS['wp_filter']);
+        unset($GLOBALS['wp_filter'], $GLOBALS['wp_flame_callback_wrap_limitations']);
         Collector::reset();
         parent::tearDown();
     }
@@ -78,6 +78,7 @@ class CallbackInstrumentorTest extends TestCase
 
         $this->assertSame($by_ref, $hook->callbacks[10]['by_ref']['function']);
         $this->assertInstanceOf(CallbackWrapper::class, $hook->callbacks[10]['normal']['function']);
+        $this->assertSame(1, $GLOBALS['wp_flame_callback_wrap_limitations']['reference_parameter']);
     }
 
     public function test_wrap_callbacks_skips_callbacks_returning_by_reference(): void
@@ -118,6 +119,7 @@ class CallbackInstrumentorTest extends TestCase
 
         $this->assertSame($returns_ref, $hook->callbacks[10]['returns_ref']['function']);
         $this->assertInstanceOf(CallbackWrapper::class, $hook->callbacks[10]['normal']['function']);
+        $this->assertSame(1, $GLOBALS['wp_flame_callback_wrap_limitations']['reference_return']);
     }
 
     public function test_wrap_callbacks_skips_non_callable_entries(): void
@@ -145,6 +147,7 @@ class CallbackInstrumentorTest extends TestCase
         $method->invoke($instrumentor, $collector, 0.5);
 
         $this->assertSame(['Missing_Class', 'method'], $hook->callbacks[10]['missing']['function']);
+        $this->assertSame(1, $GLOBALS['wp_flame_callback_wrap_limitations']['non_callable']);
     }
 
     public function test_wrap_callbacks_tolerates_malformed_accepted_args_without_warnings(): void

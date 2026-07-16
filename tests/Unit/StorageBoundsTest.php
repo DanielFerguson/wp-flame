@@ -104,6 +104,38 @@ namespace {
             return $this->delete_result;
         }
     }
+
+    class WPFlame_Retention_WPDB extends WPFlame_TimeBreakdown_WPDB
+    {
+        public int $remaining = 5001;
+
+        public function query($query)
+        {
+            $this->last_query = $query;
+            if (is_string($query) && strpos($query, 'flame_rollups') !== false) {
+                return 0;
+            }
+            if (is_string($query) && strpos($query, 'DELETE FROM') !== false) {
+                $deleted = min(500, $this->remaining);
+                $this->remaining -= $deleted;
+                return $deleted;
+            }
+
+            return 0;
+        }
+
+        public function get_var($query)
+        {
+            $this->last_query = $query;
+            return $this->remaining > 0 ? '2020-01-01 00:00:00' : null;
+        }
+
+        public function get_row($query, $output = null)
+        {
+            $this->last_query = $query;
+            return (object) ['count' => $this->remaining, 'bytes' => $this->remaining * 100];
+        }
+    }
 }
 
 namespace WPFlame\Tests\Unit {
@@ -259,10 +291,10 @@ namespace WPFlame\Tests\Unit {
             $wpdb = new \WPFlame_TimeBreakdown_WPDB();
             $storage = new Storage($wpdb);
 
-            $wpdb->delete_result = -5;
+            $wpdb->query_result = -5;
             $this->assertSame(0, $storage->delete_traces_by_user(123));
 
-            $wpdb->delete_result = ['bad'];
+            $wpdb->query_result = ['bad'];
             $this->assertSame(0, $storage->delete_traces_by_user(123));
         }
 
@@ -272,7 +304,7 @@ namespace WPFlame\Tests\Unit {
             $storage = new Storage($wpdb);
 
             $this->assertSame(0, $storage->delete_traces_by_user(0));
-            $this->assertSame(0, $wpdb->delete_calls);
+            $this->assertSame('', $wpdb->last_query);
         }
 
         public function test_prune_old_clamps_days_to_one(): void
@@ -280,10 +312,11 @@ namespace WPFlame\Tests\Unit {
             $wpdb = new \wpdb();
             $storage = new Storage($wpdb);
 
-            $storage->prune_old(-30);
+            $deleted = $storage->prune_old(-30);
 
             $this->assertSame([1, Storage::PRUNE_BATCH_LIMIT], $wpdb->prepared_params);
             $this->assertStringContainsString('LIMIT %d', (string) $wpdb->last_query);
+            $this->assertSame(0, $deleted);
         }
 
         public function test_prune_old_caps_days_to_retention_maximum(): void
@@ -294,6 +327,21 @@ namespace WPFlame\Tests\Unit {
             $storage->prune_old(Config::MAX_RETENTION_DAYS + 1000);
 
             $this->assertSame([Config::MAX_RETENTION_DAYS, Storage::PRUNE_BATCH_LIMIT], $wpdb->prepared_params);
+        }
+
+        public function test_prune_old_returns_bounded_deleted_count(): void
+        {
+            $wpdb = new \WPFlame_TimeBreakdown_WPDB();
+            $storage = new Storage($wpdb);
+
+            $wpdb->query_result = 123;
+            $this->assertSame(123, $storage->prune_old(7));
+
+            $wpdb->query_result = Storage::PRUNE_BATCH_LIMIT + 1000;
+            $this->assertSame(Storage::PRUNE_BATCH_LIMIT, $storage->prune_old(7));
+
+            $wpdb->query_result = false;
+            $this->assertSame(0, $storage->prune_old(7));
         }
 
         public function test_aggregate_stats_tolerates_missing_rows(): void
@@ -605,6 +653,30 @@ namespace WPFlame\Tests\Unit {
             $this->assertSame(45, strlen($wpdb->last_insert_data['ip_address']));
         }
 
+        public function test_schema_v2_filters_use_indexed_dimensions(): void
+        {
+            $wpdb = new \wpdb();
+            $storage = new Storage($wpdb);
+
+            $storage->list_traces([
+                'request_type'         => 'frontend',
+                'route_key'            => 'POST /checkout',
+                'instrumentation_mode' => 'standard',
+                'http_status'          => 201,
+                'is_complete'          => true,
+            ]);
+
+            $this->assertStringContainsString('request_type = %s', (string) $wpdb->last_query);
+            $this->assertStringContainsString('route_key = %s', (string) $wpdb->last_query);
+            $this->assertStringContainsString('instrumentation_mode = %s', (string) $wpdb->last_query);
+            $this->assertStringContainsString('http_status = %d', (string) $wpdb->last_query);
+            $this->assertStringContainsString('is_complete = %d', (string) $wpdb->last_query);
+            $this->assertSame(
+                ['frontend', 'POST /checkout', 'standard', 201, 1, 20, 0],
+                $wpdb->prepared_params
+            );
+        }
+
         public function test_save_trace_clamps_score_to_valid_range(): void
         {
             $wpdb = new \wpdb();
@@ -737,9 +809,53 @@ namespace WPFlame\Tests\Unit {
             $stored = json_decode($wpdb->last_insert_data['trace_data'], true);
             $this->assertIsArray($stored);
             $this->assertTrue($stored['meta']['wp_flame_trace_truncated']);
+            $this->assertTrue($stored['trace_truncated']);
+            $this->assertContains('trace_size_trimming', $stored['incomplete_reasons']);
+            $this->assertSame(160 - count($stored['spans']), $stored['trimmed_span_count']);
+            $this->assertSame(0, $wpdb->last_insert_data['is_complete']);
             $this->assertSame(160, $stored['meta']['wp_flame_original_span_count']);
             $this->assertLessThan(160, $stored['meta']['wp_flame_stored_span_count']);
             $this->assertCount($stored['meta']['wp_flame_stored_span_count'], $stored['spans']);
+        }
+
+        public function test_save_trace_refuses_unexpired_data_at_hard_row_quota(): void
+        {
+            Config::instance()->set_override('wp_flame_storage_quota_rows', Config::MIN_STORAGE_QUOTA_ROWS);
+            $wpdb = new \WPFlame_TimeBreakdown_WPDB();
+            $wpdb->row_result = (object) ['count' => Config::MIN_STORAGE_QUOTA_ROWS, 'bytes' => 0];
+            $storage = new Storage($wpdb);
+            $trace = new Trace(
+                'quota-trace',
+                '/quota',
+                'GET',
+                '2026-06-01T00:00:00+00:00',
+                1.0,
+                1024,
+                '8.3',
+                '6.7',
+                []
+            );
+
+            $result = $storage->save_trace($trace);
+
+            $this->assertFalse($result->success);
+            $this->assertSame(\WPFlame\StorageResult::QUOTA_REACHED, $result->status);
+            $this->assertSame([], $wpdb->last_insert_data);
+        }
+
+        public function test_resumable_cleanup_eventually_prunes_more_than_five_thousand_rows(): void
+        {
+            $wpdb = new \WPFlame_Retention_WPDB();
+            $storage = new Storage($wpdb);
+
+            $first = $storage->run_retention_cleanup(7, 5000);
+            $second = $storage->run_retention_cleanup(7, 5000);
+
+            $this->assertSame(5000, $first['deleted']);
+            $this->assertTrue($first['backlog']);
+            $this->assertSame(1, $second['deleted']);
+            $this->assertFalse($second['backlog']);
+            $this->assertSame(0, $wpdb->remaining);
         }
     }
 }

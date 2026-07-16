@@ -8,6 +8,7 @@ use WPFlame\Config;
 use WPFlame\Insights;
 use WPFlame\Score;
 use WPFlame\Storage;
+use WPFlame\Trace;
 
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
@@ -75,8 +76,8 @@ class FlameGraphView
 
             echo '<span class="' . esc_attr($diff_class) . '"><strong>' . esc_html($diff_text) . '</strong></span>';
             echo '<span class="wp-flame-route-stats">';
-            /* translators: %1$s: avg duration, %2$s: min duration, %3$s: max duration, %4$d: trace count */
             echo wp_kses_post(sprintf(
+                /* translators: %1$s: avg duration, %2$s: min duration, %3$s: max duration, %4$d: trace count */
                 __('Route avg: <strong>%1$sms</strong> &middot; Min: %2$sms &middot; Max: %3$sms &middot; %4$d traces', 'wp-flame'),
                 esc_html((string) $route_stats['avg_ms']),
                 esc_html((string) $route_stats['min_ms']),
@@ -127,6 +128,10 @@ class FlameGraphView
         echo '</div>';
         echo '</div>';
 
+        echo $this->capture_report_html( $trace ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- helper escapes every dynamic value.
+
+        $this->render_top_opportunities( $trace );
+
         // Request context: user, IP, user agent
         echo '<div class="wp-flame-request-context">';
         $request_context = $this->request_context($trace->meta);
@@ -165,7 +170,19 @@ class FlameGraphView
         // Score Breakdown section
         echo '<div class="wp-flame-score-breakdown">';
         echo '<h3>' . esc_html__('Score Breakdown', 'wp-flame') . '</h3>';
+        if ( (int) ( $score['version'] ?? 1 ) < Score::VERSION ) {
+            echo '<p class="description">' . esc_html__( 'Legacy Score v1: the stored overall score is preserved, but a historical factor snapshot was not available.', 'wp-flame' ) . '</p>';
+        }
         foreach ($score['factors'] as $factor) {
+            $status = Config::string_value( $factor['status'] ?? 'observed', 'observed' );
+            if ( $status !== 'observed' ) {
+                echo '<div class="wp-flame-score-factor">';
+                echo '<span class="wp-flame-score-factor-label">' . esc_html($factor['label']) . '</span>';
+                echo '<span class="wp-flame-score-factor-value">' . esc_html__( 'Unknown', 'wp-flame' ) . '</span>';
+                echo '<p class="description">' . esc_html( Config::string_value( $factor['reason'] ?? $status, $status ) ) . '</p>';
+                echo '</div>';
+                continue;
+            }
             $factor_color = Score::grade((int) round($factor['score']))['color'];
             echo '<div class="wp-flame-score-factor">';
             echo '<span class="wp-flame-score-factor-label">' . esc_html($factor['label']) . '</span>';
@@ -213,24 +230,21 @@ class FlameGraphView
         echo '</div>';
 
         // Flame graph container
+        echo '<section class="wp-flame-graph-tools" aria-labelledby="wp-flame-timeline-title">';
+        echo '<h2 id="wp-flame-timeline-title">' . esc_html__( 'Technical timeline', 'wp-flame' ) . '</h2>';
+        echo '<div class="wp-flame-graph-filters" role="search">';
+        echo '<label>' . esc_html__( 'Search spans', 'wp-flame' ) . ' <input id="wp-flame-span-search" type="search" autocomplete="off" placeholder="' . esc_attr__( 'Callback, source, query, host…', 'wp-flame' ) . '"></label>';
+        echo '<label>' . esc_html__( 'Type', 'wp-flame' ) . ' <select id="wp-flame-type-filter"><option value="">' . esc_html__( 'All types', 'wp-flame' ) . '</option></select></label>';
+        echo '<label>' . esc_html__( 'Source', 'wp-flame' ) . ' <select id="wp-flame-source-filter"><option value="">' . esc_html__( 'All sources', 'wp-flame' ) . '</option></select></label>';
+        echo '<span id="wp-flame-filter-status" role="status" aria-live="polite"></span>';
+        echo '</div>';
         echo '<div id="wp-flame-breadcrumbs"></div>';
-        echo '<div id="wp-flame-graph"></div>';
+        echo '<div id="wp-flame-graph" role="region" aria-label="' . esc_attr__( 'Interactive request flame graph. Use Tab to select spans and Enter to inspect or zoom.', 'wp-flame' ) . '"></div>';
         echo '<div id="wp-flame-tooltip" style="display:none"></div>';
-
-        $insights = Insights::analyze($trace);
-        $insights = Insights::normalize( apply_filters( 'wp_flame_insights', $insights, $trace ) );
-        if (!empty($insights)) {
-            echo '<div class="wp-flame-insights">';
-            echo '<h3>' . esc_html__('Insights', 'wp-flame') . '</h3>';
-            foreach ($insights as $insight) {
-                $class = $insight['severity'] === 'warning' ? 'wp-flame-insight-warning' : 'wp-flame-insight-info';
-                echo '<div class="wp-flame-insight ' . esc_attr($class) . '">';
-                echo '<strong>' . esc_html($insight['title']) . '</strong>';
-                echo '<p>' . esc_html($insight['detail']) . '</p>';
-                echo '</div>';
-            }
-            echo '</div>';
-        }
+        echo '<aside id="wp-flame-span-detail" class="wp-flame-span-detail" tabindex="-1" aria-labelledby="wp-flame-span-detail-title">';
+        echo '<h3 id="wp-flame-span-detail-title">' . esc_html__( 'Span evidence', 'wp-flame' ) . '</h3>';
+        echo '<p>' . esc_html__( 'Select any span, including a leaf span, to inspect its supporting data.', 'wp-flame' ) . '</p>';
+        echo '</aside></section>';
 
         echo '</div>';
 
@@ -243,14 +257,150 @@ class FlameGraphView
         );
     }
 
+    private function render_top_opportunities( Trace $trace ): void
+    {
+        $environment = $trace->capture_report->environment_snapshot_id !== null
+            ? $this->storage->get_environment_snapshot( $trace->capture_report->environment_snapshot_id )
+            : null;
+        $insights = Insights::analyze( $trace, $environment );
+        $insights = Insights::normalize( apply_filters( 'wp_flame_insights', $insights, $trace ) );
+
+        echo '<section class="wp-flame-insights wp-flame-top-opportunities" aria-labelledby="wp-flame-opportunities-title">';
+        echo '<h2 id="wp-flame-opportunities-title">' . esc_html__( 'Top opportunities', 'wp-flame' ) . '</h2>';
+        echo '<p class="description">' . esc_html__( 'Start here. These conclusions only use evidence this capture could observe.', 'wp-flame' ) . '</p>';
+        if ( $insights === [] ) {
+            echo '<p>' . esc_html__( 'No supported issue crossed the current evidence thresholds. This does not prove the request is fully optimized; review capture completeness and the technical timeline below.', 'wp-flame' ) . '</p></section>';
+            return;
+        }
+
+        foreach ( array_slice( $insights, 0, 5 ) as $index => $insight ) {
+            $class = $insight['severity'] === 'warning' ? 'wp-flame-insight-warning' : 'wp-flame-insight-info';
+            $needs_developer = in_array(
+                $insight['action_type'],
+                [
+                    'optimize_query',
+                    'repair_query',
+                    'optimize_callback',
+                    'deduplicate_or_cache_query',
+                    'repair_http_dependency',
+                    'defer_http',
+                    'cache_or_defer_http',
+                ],
+                true
+            );
+            echo '<article class="wp-flame-insight ' . esc_attr( $class ) . '">';
+            echo '<h3><span class="wp-flame-opportunity-rank">' . esc_html( (string) ( $index + 1 ) ) . '</span> ' . esc_html( $insight['title'] ) . '</h3>';
+            echo '<p>' . esc_html( $insight['detail'] ) . '</p>';
+            $evidence = [];
+            if ( $insight['source'] !== '' ) {
+                $evidence[] = $insight['source'] . ( $insight['source_version'] !== '' ? ' ' . $insight['source_version'] : '' );
+            }
+            if ( $insight['measured_impact_ms'] > 0 ) {
+                $evidence[] = round( $insight['measured_impact_ms'], 1 ) . 'ms of measured work';
+            }
+            /* translators: %d: number of supporting span observations. */
+            $evidence[] = sprintf( _n( '%d observation', '%d observations', $insight['evidence_count'], 'wp-flame' ), $insight['evidence_count'] );
+            $evidence[] = ucfirst( $insight['confidence'] ) . ' confidence';
+            echo '<p class="wp-flame-opportunity-evidence">' . esc_html( implode( ' · ', $evidence ) ) . '</p>';
+            echo '<p><strong>' . esc_html__( 'Help needed:', 'wp-flame' ) . '</strong> ' . esc_html( $needs_developer ? __( 'Developer or host recommended', 'wp-flame' ) : __( 'A site administrator can start', 'wp-flame' ) ) . '</p>';
+            if ( is_array( $insight['remediation'] ) && ! empty( $insight['remediation']['next_action'] ) ) {
+                echo '<p><strong>' . esc_html__( 'Safest next action:', 'wp-flame' ) . '</strong> ' . esc_html( $insight['remediation']['next_action'] ) . '</p>';
+            }
+            if ( $insight['verification'] !== '' ) {
+                echo '<p><strong>' . esc_html__( 'Verify:', 'wp-flame' ) . '</strong> ' . esc_html( $insight['verification'] ) . '</p>';
+            }
+            echo '</article>';
+        }
+        echo '</section>';
+    }
+
     private function encode_trace_for_script( \WPFlame\Trace $trace ): string
     {
+        $data = $trace->toArray();
+        $environment = $trace->capture_report->environment_snapshot_id !== null
+            ? $this->storage->get_environment_snapshot( $trace->capture_report->environment_snapshot_id )
+            : null;
+        if ( $environment !== null && isset( $data['spans'] ) && is_array( $data['spans'] ) ) {
+            foreach ( $data['spans'] as &$span ) {
+                if ( ! is_array( $span ) ) {
+                    continue;
+                }
+                $source = Config::string_value( $span['source'] ?? '', '' );
+                $version = $source !== '' ? Insights::source_version( $source, $environment ) : null;
+                if ( $version !== null ) {
+                    $span['meta'] = isset( $span['meta'] ) && is_array( $span['meta'] ) ? $span['meta'] : [];
+                    $span['meta']['source_version'] = $version;
+                }
+            }
+            unset( $span );
+        }
         $json = wp_json_encode(
-            $trace->toArray(),
+            $data,
             JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT
         );
 
         return is_string( $json ) ? $json : '{}';
+    }
+
+    private function capture_report_html( Trace $trace ): string
+    {
+        $report = $trace->capture_report;
+        $complete = empty( $report->incomplete_reasons )
+            && $report->dropped_span_count === 0
+            && $report->auto_closed_span_count === 0
+            && $report->trimmed_span_count === 0
+            && ! $report->trace_truncated;
+
+        $html = '<section class="wp-flame-capture-report" aria-labelledby="wp-flame-capture-report-title">';
+        $html .= '<h2 id="wp-flame-capture-report-title">' . esc_html__( 'Capture report', 'wp-flame' ) . '</h2>';
+        $html .= '<p class="' . esc_attr( $complete ? 'wp-flame-capture-complete' : 'wp-flame-capture-incomplete' ) . '"><strong>';
+        $html .= esc_html( $complete ? __( 'Complete for requested capabilities', 'wp-flame' ) : __( 'Incomplete capture', 'wp-flame' ) );
+        $html .= '</strong></p>';
+        $html .= '<dl>';
+        $fields = [
+            __( 'Mode', 'wp-flame' )                 => $report->instrumentation_mode,
+            __( 'Origin', 'wp-flame' )               => $report->capture_origin,
+            __( 'Request type', 'wp-flame' )         => $report->request_type,
+            __( 'Capture began', 'wp-flame' )        => $report->capture_start_stage,
+            __( 'Observed duration', 'wp-flame' )    => round( $report->observed_duration_ms, 2 ) . ' ms',
+            __( 'Sampling probability', 'wp-flame' ) => round( $report->effective_sample_probability * 100, 4 ) . '%',
+        ];
+        if ( $report->unobserved_prebootstrap_ms !== null ) {
+            $fields[ __( 'Estimated pre-capture gap', 'wp-flame' ) ] = round( $report->unobserved_prebootstrap_ms, 2 ) . ' ms';
+        }
+        foreach ( $fields as $label => $value ) {
+            $html .= '<div><dt>' . esc_html( (string) $label ) . '</dt><dd>' . esc_html( (string) $value ) . '</dd></div>';
+        }
+        $html .= '</dl>';
+
+        $html .= '<h3>' . esc_html__( 'Telemetry capabilities', 'wp-flame' ) . '</h3><ul>';
+        foreach ( $report->capabilities as $key => $capability ) {
+            $label = ucwords( str_replace( '_', ' ', $key ) );
+            $status = ucwords( str_replace( '_', ' ', $capability['status'] ) );
+            $html .= '<li><strong>' . esc_html( $label ) . ':</strong> ' . esc_html( $status );
+            if ( $capability['reason'] !== '' ) {
+                $html .= ' <small>(' . esc_html( str_replace( '_', ' ', $capability['reason'] ) ) . ')</small>';
+            }
+            $html .= '</li>';
+        }
+        $html .= '</ul>';
+
+        if ( ! empty( $report->incomplete_reasons ) ) {
+            $html .= '<h3>' . esc_html__( 'Why this trace is incomplete', 'wp-flame' ) . '</h3><ul>';
+            foreach ( $report->incomplete_reasons as $reason ) {
+                $html .= '<li>' . esc_html( str_replace( '_', ' ', $reason ) ) . '</li>';
+            }
+            $html .= '</ul>';
+        }
+
+        $html .= '<p class="description">' . esc_html( sprintf(
+            /* translators: %d: score algorithm version */
+            __( 'Score version %d is directional. Factors that depend on unavailable telemetry must not be read as healthy zeroes.', 'wp-flame' ),
+            $report->score_version
+        ) ) . '</p>';
+        $html .= '</section>';
+
+        return $html;
     }
 
     /**

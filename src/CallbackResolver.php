@@ -18,6 +18,9 @@ class CallbackResolver
     /** @var array<string, array> */
     private static array $source_cache = [];
 
+    /** @var array<string, array{caller_file: string, caller_line: int}> */
+    private static array $location_cache = [];
+
     /**
      * Resolve a human-readable name for a WordPress callback.
      */
@@ -55,7 +58,10 @@ class CallbackResolver
             $filename = self::get_callback_filename($callback);
             $source = $collector->get_source_from_file($filename);
         } catch (\ReflectionException $e) {
-            $source = ['type' => Span::TYPE_PHP, 'source' => 'unknown'];
+            $source = [
+                'type'   => Span::TYPE_PHP,
+                'source' => 'unknown',
+            ];
         }
 
         if (count(self::$source_cache) < self::MAX_CACHE_ENTRIES) {
@@ -63,6 +69,37 @@ class CallbackResolver
         }
 
         return $source;
+    }
+
+    /** @return array{caller_file: string, caller_line: int} */
+    public static function resolve_location( string $callback_id, $callback ): array
+    {
+        if ( $callback_id !== '' && isset( self::$location_cache[ $callback_id ] ) ) {
+            return self::$location_cache[ $callback_id ];
+        }
+        $location = [
+            'caller_file' => '',
+            'caller_line' => 0,
+        ];
+        try {
+            $reflection = self::get_callback_reflection( $callback );
+            $file = $reflection->getFileName();
+            if ( is_string( $file ) && $file !== '' ) {
+                $location = [
+                    'caller_file' => substr( self::relative_path( $file ), 0, 300 ),
+                    'caller_line' => Config::bounded_int( $reflection->getStartLine(), 0, 0, 10000000 ),
+                ];
+            }
+        } catch ( \ReflectionException $error ) {
+            $location = [
+                'caller_file' => '',
+                'caller_line' => 0,
+            ];
+        }
+        if ( $callback_id !== '' && count( self::$location_cache ) < self::MAX_CACHE_ENTRIES ) {
+            self::$location_cache[ $callback_id ] = $location;
+        }
+        return $location;
     }
 
     /**
@@ -120,6 +157,7 @@ class CallbackResolver
     {
         self::$name_cache = [];
         self::$source_cache = [];
+        self::$location_cache = [];
     }
 
     private static function do_resolve_name($callback): string
@@ -140,6 +178,7 @@ class CallbackResolver
         if (is_array($callback) && isset($callback[0], $callback[1])) {
             $class = is_object($callback[0]) ? get_class($callback[0]) : $callback[0];
             if (is_string($class) && ! class_exists($class)) {
+                // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Internal exception text is never rendered as HTML.
                 throw new \ReflectionException("Class '{$class}' does not exist");
             }
             return self::short_class_name($class) . '::' . $callback[1];

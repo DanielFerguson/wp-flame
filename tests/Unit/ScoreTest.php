@@ -277,7 +277,7 @@ class ScoreTest extends TestCase
 
         $this->assertCount(5, $result['factors']);
         $this->assertSame('response_time', $result['factors'][0]['key']);
-        $this->assertSame('Response Time', $result['factors'][0]['label']);
+        $this->assertSame('Observed Duration', $result['factors'][0]['label']);
     }
 
     public function test_malformed_score_factor_display_values_fall_back_without_warnings(): void
@@ -308,7 +308,7 @@ class ScoreTest extends TestCase
         }
 
         $this->assertSame([], $warnings);
-        $this->assertSame('Response Time', $result['factors'][0]['label']);
+        $this->assertSame('Observed Duration', $result['factors'][0]['label']);
         $this->assertSame('50ms', $result['factors'][0]['value']);
         $this->assertSame(100, $result['factors'][0]['score']);
         $this->assertSame(35, $result['factors'][0]['weight']);
@@ -328,7 +328,7 @@ class ScoreTest extends TestCase
         $trace = $this->make_trace(50.0, []);
         $result = Score::calculate($trace);
 
-        $this->assertSame('Response Time', $result['factors'][0]['label']);
+        $this->assertSame('Observed Duration', $result['factors'][0]['label']);
         $this->assertSame('50ms', $result['factors'][0]['value']);
         $this->assertSame(100, $result['factors'][0]['score']);
         $this->assertSame(35, $result['factors'][0]['weight']);
@@ -500,7 +500,58 @@ class ScoreTest extends TestCase
     {
         $score = Score::calculate_from_basic(NAN, 5);
 
-        $this->assertSame(65, $score);
+        $this->assertSame(0, $score);
+    }
+
+    public function test_score_v2_marks_unrequested_database_and_callbacks_unknown_and_renormalizes(): void
+    {
+        $trace = $this->make_v2_trace('safe', [
+            'database'  => [ 'status' => 'not_requested', 'reason' => 'safe_mode' ],
+            'callbacks' => [ 'status' => 'not_requested', 'reason' => 'safe_mode' ],
+        ]);
+
+        $result = Score::calculate($trace);
+        $factors = array_column($result['factors'], null, 'key');
+
+        $this->assertSame(Score::VERSION, $result['version']);
+        $this->assertSame(55, $result['observed_weight']);
+        $this->assertSame('not_requested', $factors['query_count']['status']);
+        $this->assertSame('Unknown', $factors['query_count']['value']);
+        $this->assertSame(0, $factors['query_count']['weight']);
+        $this->assertSame('not_requested', $factors['slow_callbacks']['status']);
+        $this->assertSame(0, $factors['slow_callbacks']['weight']);
+        $this->assertSame('observed', $factors['http_time']['status']);
+    }
+
+    public function test_score_v2_custom_database_is_unavailable_not_excellent(): void
+    {
+        $trace = $this->make_v2_trace('standard', [
+            'database' => [ 'status' => 'unavailable', 'reason' => 'custom_database_subclass' ],
+        ]);
+
+        $result = Score::calculate($trace);
+        $factors = array_column($result['factors'], null, 'key');
+
+        $this->assertSame('unavailable', $factors['query_count']['status']);
+        $this->assertSame('custom_database_subclass', $factors['query_count']['reason']);
+        $this->assertSame('unavailable', $factors['db_ratio']['status']);
+        $this->assertSame(0, $factors['db_ratio']['weight']);
+    }
+
+    public function test_persisted_score_snapshot_is_used_for_historical_display(): void
+    {
+        $trace = $this->make_v2_trace('standard');
+        $snapshot = Score::calculate($trace);
+        $trace->set_score_snapshot($snapshot);
+
+        $round_trip = Trace::fromArray($trace->toArray());
+        $round_trip->capture_report->capabilities['database'] = [
+            'status' => 'unavailable',
+            'reason' => 'changed_after_capture',
+        ];
+
+        $this->assertSame($snapshot, Score::calculate($round_trip));
+        $this->assertSame($snapshot['score'], Score::calculate($round_trip)['score']);
     }
 
     public function test_grade_clamps_out_of_range_scores_to_score_domain(): void
@@ -581,5 +632,32 @@ class ScoreTest extends TestCase
         $this->assertNotNull($slow_cb_factor);
         $this->assertSame('1', $slow_cb_factor['value']); // 1 slow resolver
         $this->assertLessThan(100, $slow_cb_factor['score']); // Score penalized
+    }
+
+    /**
+     * @param array<string, array{status: string, reason: string}> $overrides
+     */
+    private function make_v2_trace(string $mode, array $overrides = []): Trace
+    {
+        $capabilities = [
+            'early_lifecycle' => [ 'status' => 'captured', 'reason' => '' ],
+            'database'        => [ 'status' => 'captured', 'reason' => '' ],
+            'callbacks'       => [ 'status' => $mode === 'deep' ? 'captured' : 'not_requested', 'reason' => $mode . '_mode' ],
+            'http'            => [ 'status' => 'captured', 'reason' => '' ],
+            'graphql'         => [ 'status' => 'not_requested', 'reason' => 'not_graphql' ],
+            'cache_counters'  => [ 'status' => 'unavailable', 'reason' => 'not_exposed' ],
+        ];
+
+        return new Trace(
+            'v2-trace', '/test', 'GET', '2026-07-16T00:00:00+00:00',
+            250.0, 1048576, '8.3', '6.8', [], [], [
+                'request_type'        => 'frontend',
+                'route_key'           => 'GET /test',
+                'instrumentation_mode' => $mode,
+                'capture_start_stage' => 'mu_plugin',
+                'score_version'       => Score::VERSION,
+                'capabilities'        => array_replace($capabilities, $overrides),
+            ]
+        );
     }
 }

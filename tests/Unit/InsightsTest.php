@@ -447,6 +447,23 @@ class InsightsTest extends TestCase
         $this->assertStringContainsString('http://', $insights[0]['detail']);
     }
 
+    public function test_http_during_early_phase_bounds_legacy_url_and_host_metadata(): void
+    {
+        $phase_span = $this->make_span('lc1', Span::TYPE_CORE, 'Theme Setup', 150.0);
+        $long_host = str_repeat('h', 300);
+        $http_span = $this->make_span('h1', Span::TYPE_HTTP, 'HTTP', 40.0, 'lc1', [
+            'url' => 'https://' . $long_host . '.example.com/' . str_repeat('path', 3000),
+        ]);
+
+        $trace = $this->make_trace([$phase_span, $http_span]);
+        $insights = Insights::analyze($trace);
+
+        $this->assertCount(1, $insights);
+        $this->assertLessThanOrEqual(360, strlen($insights[0]['detail']));
+        $this->assertStringContainsString(str_repeat('h', 255), $insights[0]['detail']);
+        $this->assertStringNotContainsString(str_repeat('h', 256), $insights[0]['detail']);
+    }
+
     public function test_http_during_early_phase_via_grandparent_produces_warning(): void
     {
         // HTTP span is a grandchild of Init
@@ -479,7 +496,7 @@ class InsightsTest extends TestCase
 
         // The HTTP span is below 100ms so slow_http rule won't fire either;
         // the early-phase rule should also not fire.
-        $early = array_filter($insights, fn($i) => str_contains($i['title'], 'blocks page load'));
+        $early = array_filter($insights, fn($i) => str_contains($i['title'], 'delays observed execution'));
         $this->assertEmpty($early);
     }
 
@@ -497,7 +514,7 @@ class InsightsTest extends TestCase
         $trace    = $this->make_trace([$phase_span, $first, $second, $http_span]);
         $insights = Insights::analyze($trace);
 
-        $early = array_filter($insights, fn($i) => str_contains($i['title'], 'blocks page load'));
+        $early = array_filter($insights, fn($i) => str_contains($i['title'], 'delays observed execution'));
         $this->assertEmpty($early);
     }
 
@@ -558,6 +575,21 @@ class InsightsTest extends TestCase
         $insights = Insights::analyze($trace);
 
         $matches = array_filter($insights, fn($i) => str_contains($i['title'], 'No persistent object cache'));
+        $this->assertEmpty($matches);
+    }
+
+    public function test_no_persistent_cache_does_not_fire_when_external_cache_is_configured(): void
+    {
+        $trace = $this->make_trace([], [
+            'cache_backend'                    => 'WP_Object_Cache',
+            'cache_hits'                       => 1,
+            'cache_misses'                     => 100,
+            'external_object_cache_configured' => true,
+        ]);
+
+        $insights = Insights::analyze($trace);
+        $matches = array_filter($insights, fn($i) => str_contains($i['title'], 'No persistent object cache'));
+
         $this->assertEmpty($matches);
     }
 
@@ -865,6 +897,26 @@ class InsightsTest extends TestCase
         $this->assertEmpty($matches);
     }
 
+    public function test_dashboard_pagination_analysis_caps_query_params_before_parsing(): void
+    {
+        $noise = [];
+        for ($i = 1; $i <= 55; $i++) {
+            $noise[] = 'noise' . $i . '=1';
+        }
+
+        $url = '/wp-json/wc/v3/customers?' . implode('&', $noise) . '&page=';
+        $traces = [
+            ['url' => $url . '1', 'ip_address' => '203.0.113.45'],
+            ['url' => $url . '2', 'ip_address' => '203.0.113.45'],
+            ['url' => $url . '3', 'ip_address' => '203.0.113.45'],
+        ];
+
+        $insights = Insights::analyze_dashboard([], [], $traces);
+        $matches = array_filter($insights, fn($i) => str_contains($i['title'], 'scraping'));
+
+        $this->assertEmpty($matches);
+    }
+
     public function test_dashboard_pagination_analysis_bounds_endpoint_detail_lines(): void
     {
         $traces = [];
@@ -981,10 +1033,15 @@ class InsightsTest extends TestCase
         }
 
         $this->assertSame([], $warnings);
-        $this->assertSame([
-            ['severity' => 'warning', 'title' => 'Valid warning', 'detail' => 'Useful detail'],
-            ['severity' => 'info', 'title' => 'Object insight', 'detail' => 'Object detail'],
-        ], $normalized);
+        $this->assertCount(2, $normalized);
+        $this->assertSame('warning', $normalized[0]['severity']);
+        $this->assertSame('Valid warning', $normalized[0]['title']);
+        $this->assertSame('Useful detail', $normalized[0]['detail']);
+        $this->assertSame('low', $normalized[0]['confidence']);
+        $this->assertSame('investigate', $normalized[0]['action_type']);
+        $this->assertSame('info', $normalized[1]['severity']);
+        $this->assertSame('Object insight', $normalized[1]['title']);
+        $this->assertSame('medium', $normalized[1]['confidence']);
     }
 
     public function test_normalize_bounds_insight_count_and_text_size(): void

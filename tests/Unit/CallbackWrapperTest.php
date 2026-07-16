@@ -129,5 +129,47 @@ class CallbackWrapperTest extends TestCase
         $trace = $collector->get_trace();
         $this->assertSame('wp_head', $trace->spans[0]->meta['hook']);
         $this->assertSame(20, $trace->spans[0]->meta['priority']);
+        $this->assertSame('my_callback', $trace->spans[0]->meta['callback']);
+        $this->assertStringContainsString('CallbackWrapperTest.php', $trace->spans[0]->meta['caller_file']);
+        $this->assertGreaterThan(0, $trace->spans[0]->meta['caller_line']);
+    }
+
+    public function test_source_containing_wp_flame_is_not_treated_as_self_observation(): void
+    {
+        $collector = Collector::instance();
+        $collector->start_request(microtime(true));
+        $wrapper = new CallbackWrapper(
+            static function (): void {},
+            $collector,
+            'init',
+            2,
+            'theme_callback',
+            ['type' => Span::TYPE_THEME, 'source' => 'child-theme:wp-flame-smoke-child'],
+            0.0
+        );
+
+        $wrapper();
+
+        $this->assertCount(1, $collector->get_trace()->spans);
+        $this->assertSame('child-theme:wp-flame-smoke-child', $collector->get_trace()->spans[0]->source);
+    }
+
+    public function test_exact_wp_flame_source_bypasses_self_instrumentation(): void
+    {
+        $collector = Collector::instance();
+        $collector->start_request(microtime(true));
+        $wrapper = new CallbackWrapper(
+            static function (): void {},
+            $collector,
+            'init',
+            2,
+            'self_callback',
+            ['type' => Span::TYPE_PLUGIN, 'source' => 'wp-flame'],
+            0.0
+        );
+
+        $wrapper();
+
+        $this->assertCount(0, $collector->get_trace()->spans);
     }
 }

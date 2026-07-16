@@ -33,10 +33,19 @@ class PluginLifecycleTest extends TestCase
 
     public function test_mu_plugin_install_records_limited_mode_when_directory_is_unavailable(): void
     {
-        $this->assertMatchesRegularExpression(
-            '/function wp_flame_install_mu_plugin\(\): void \{\s*\$mu_dir = wp_flame_mu_plugin_dir\(\);\s*if \( \$mu_dir === \'\' \) \{\s*update_option\( \'wp_flame_mu_plugin_failed\', true \);\s*return;\s*\}/s',
-            $this->source
-        );
+        $this->assertStringContainsString('function wp_flame_install_mu_plugin(): void', $this->source);
+        $this->assertStringContainsString('wp_flame_record_mu_plugin_state( WPFlame\MuPluginManager::WRITE_FAILED );', $this->source);
+    }
+
+    public function test_mu_plugin_lifecycle_uses_verified_manager_operations(): void
+    {
+        $this->assertStringContainsString('WPFlame\MuPluginManager::install(', $this->source);
+        $this->assertStringContainsString('WPFlame\MuPluginManager::remove(', $this->source);
+        $this->assertStringContainsString("'wp_flame_mu_plugin_hash'", $this->source);
+        $this->assertStringContainsString('function wp_flame_legacy_mu_plugin_hashes(): array', $this->source);
+        $this->assertStringContainsString('wp_flame_legacy_mu_plugin_hashes() );', $this->source);
+        $this->assertStringNotContainsString('@copy( $mu_src, $mu_dest )', $this->source);
+        $this->assertStringNotContainsString('@unlink( $mu_file )', $this->source);
     }
 
     public function test_multisite_lifecycle_queries_all_site_ids_explicitly(): void

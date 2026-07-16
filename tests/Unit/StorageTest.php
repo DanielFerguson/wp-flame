@@ -18,6 +18,7 @@ use ReflectionClass;
 use WPFlame\Config;
 use WPFlame\Span;
 use WPFlame\Storage;
+use WPFlame\StorageResult;
 use WPFlame\Trace;
 
 class StorageTest extends TestCase
@@ -214,6 +215,109 @@ class StorageTest extends TestCase
         $this->assertSame(86400000, $data['spans'][0]['duration_ms']);
         $this->assertSame(86400000, $data['spans'][0]['self_ms']);
         $this->assertSame(500, strlen($data['spans'][0]['meta']['long_meta']));
+    }
+
+    public function test_save_trace_writes_schema_v2_dimensions_without_decoding_json_for_lists(): void
+    {
+        $wpdb = new \wpdb();
+        $storage = new Storage($wpdb);
+        $trace = new Trace(
+            'trace-v2',
+            '/checkout',
+            'POST',
+            '2026-07-16T00:00:00+00:00',
+            80.0,
+            1024,
+            '8.3',
+            '6.8',
+            [],
+            [],
+            [
+                'capture_session_id'         => 'session-1',
+                'capture_origin'             => 'forced',
+                'request_type'               => 'frontend',
+                'route_key'                  => 'POST /checkout',
+                'http_status'                => 201,
+                'instrumentation_mode'       => 'standard',
+                'environment_snapshot_id'    => 'environment-1',
+                'score_version'              => 2,
+                'incomplete_reasons'         => [],
+            ]
+        );
+
+        $result = $storage->save_trace($trace, 75);
+
+        $this->assertSame('frontend', $wpdb->last_insert_data['request_type']);
+        $this->assertSame('POST /checkout', $wpdb->last_insert_data['route_key']);
+        $this->assertSame(201, $wpdb->last_insert_data['http_status']);
+        $this->assertSame('standard', $wpdb->last_insert_data['instrumentation_mode']);
+        $this->assertSame('forced', $wpdb->last_insert_data['capture_origin']);
+        $this->assertSame('session-1', $wpdb->last_insert_data['capture_session_id']);
+        $this->assertSame('environment-1', $wpdb->last_insert_data['environment_snapshot_id']);
+        $this->assertSame(2, $wpdb->last_insert_data['score_version']);
+        $this->assertSame(1, $wpdb->last_insert_data['is_complete']);
+        $this->assertTrue($result->success);
+        $this->assertSame(StorageResult::STORED, $result->status);
+        $this->assertSame(strlen($wpdb->last_insert_data['trace_data']), $result->stored_bytes);
+        $this->assertFalse($result->trace_truncated);
+    }
+
+    public function test_save_trace_returns_insert_failure(): void
+    {
+        $wpdb = new class extends \wpdb {
+            public function insert($table, $data, $formats)
+            {
+                $this->last_insert_data = $data;
+                $this->last_error = 'insert failed';
+                return false;
+            }
+        };
+        $storage = new Storage($wpdb);
+        $trace = new Trace('failed', '/', 'GET', '2026-07-16T00:00:00+00:00', 1, 1, '8.3', '6.8', []);
+
+        $result = $storage->save_trace($trace);
+
+        $this->assertFalse($result->success);
+        $this->assertSame(StorageResult::INSERT_FAILED, $result->status);
+    }
+
+    public function test_documented_full_payload_limits_survive_storage_round_trip(): void
+    {
+        $wpdb = new \wpdb();
+        $storage = new Storage($wpdb);
+        $trace = new Trace(
+            'payloads',
+            '/',
+            'GET',
+            '2026-07-16T00:00:00+00:00',
+            1,
+            1,
+            '8.3',
+            '6.8',
+            [
+                new Span('db', null, 'Query', Span::TYPE_DB, 'plugin', 0, 1, [
+                    'query' => str_repeat('q', 5000),
+                ]),
+                new Span('http', null, 'HTTP', Span::TYPE_HTTP, 'plugin', 0, 1, [
+                    'url' => str_repeat('u', 3000),
+                ]),
+                new Span('graphql', null, 'GraphQL', Span::TYPE_CORE, 'wpgraphql', 0, 1, [
+                    'graphql_query' => str_repeat('g', 70000),
+                ]),
+            ]
+        );
+
+        $storage->save_trace($trace);
+        $stored = json_decode($wpdb->last_insert_data['trace_data'], true);
+
+        $this->assertSame(4096, strlen($stored['spans'][0]['meta']['query']));
+        $this->assertSame(2048, strlen($stored['spans'][1]['meta']['url']));
+        $this->assertSame(65536, strlen($stored['spans'][2]['meta']['graphql_query']));
+
+        $roundTrip = Trace::fromArray($stored);
+        $this->assertSame(4096, strlen($roundTrip->spans[0]->meta['query']));
+        $this->assertSame(2048, strlen($roundTrip->spans[1]->meta['url']));
+        $this->assertSame(65536, strlen($roundTrip->spans[2]->meta['graphql_query']));
     }
 }
 }

@@ -20,18 +20,29 @@ class Insights
     private const MAX_PAGINATION_GROUPS = 100;
     private const MAX_PAGINATION_PAGES_PER_GROUP = 50;
     private const MAX_PAGINATION_ENDPOINTS_PER_IP = 5;
+    private const MAX_PAGINATION_QUERY_PARAMS = 50;
+    private const MAX_SPAN_IDS = 100;
+    private const MAX_SPAN_ID_BYTES = 128;
+    private const MAX_SOURCE_BYTES = 200;
+    private const MAX_VERSION_BYTES = 64;
+    private const MAX_CONTRACT_BYTES = 1000;
 
     /**
      * Run all rules against the trace and return a flat array of insight items.
      *
      * Each insight: ['severity' => 'warning'|'info', 'title' => string, 'detail' => string]
      *
-     * @return array<int, array{severity: string, title: string, detail: string}>
+     * @return array<int, array<string, mixed>>
      */
-    public static function analyze(Trace $trace): array
+    public static function analyze(Trace $trace, ?EnvironmentSnapshot $environment = null): array
     {
         $engine = new InsightEngine( [
+            new Rules\IncompleteCapture(),
+            new Rules\RouteBudgetViolation(),
+            new Rules\FailedHttpRequest(),
             new Rules\SlowHttpRequests(),
+            new Rules\FailedDatabaseQuery(),
+            new Rules\SlowDatabaseQuery(),
             new Rules\DuplicateDbQueries(),
             new Rules\HighQueryCount(),
             new Rules\SlowCallbacks(),
@@ -41,10 +52,48 @@ class Insights
         ] );
 
         $insights = $engine->analyze( $trace );
+        if ( $environment !== null ) {
+            foreach ( $insights as $insight ) {
+                if ( $insight->source !== null && $insight->source_version === null ) {
+                    $insight->source_version = self::source_version( $insight->source, $environment );
+                }
+            }
+        }
 
         return self::normalize( array_map( function ( Insight $i ) {
             return $i->to_array();
         }, $insights ) );
+    }
+
+    public static function source_version( string $source, EnvironmentSnapshot $environment ): ?string
+    {
+        $data = $environment->data;
+        // phpcs:ignore WordPress.WP.CapitalPDangit.MisspelledInText -- lowercase internal source identifier.
+        if ( $source === 'wordpress' ) {
+            $version = self::display_string( $data['wordpress_version'] ?? '', '' );
+            return $version !== '' ? self::limit_string( $version, self::MAX_VERSION_BYTES ) : null;
+        }
+        if ( strpos( $source, 'child-theme:' ) === 0 || strpos( $source, 'parent-theme:' ) === 0 ) {
+            $theme = isset( $data['theme'] ) && is_array( $data['theme'] ) ? $data['theme'] : [];
+            $is_child = strpos( $source, 'child-theme:' ) === 0;
+            $key = $is_child ? 'stylesheet_version' : 'template_version';
+            $version = self::display_string( $theme[ $key ] ?? '', '' );
+            return $version !== '' ? self::limit_string( $version, self::MAX_VERSION_BYTES ) : null;
+        }
+        if ( strpos( $source, ':' ) !== false ) {
+            return null;
+        }
+
+        $plugins = isset( $data['plugins'] ) && is_array( $data['plugins'] ) ? $data['plugins'] : [];
+        foreach ( $plugins as $plugin_file => $version ) {
+            $plugin_file = self::display_string( $plugin_file, '' );
+            if ( $plugin_file === $source || strpos( $plugin_file, $source . '/' ) === 0 ) {
+                $version = self::display_string( $version, '' );
+                return $version !== '' ? self::limit_string( $version, self::MAX_VERSION_BYTES ) : null;
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -53,7 +102,7 @@ class Insights
      * @param array<int, array<string, mixed>> $top_users  Results from Storage::get_top_users()
      * @param array<int, array<string, mixed>> $top_ips    Results from Storage::get_top_ips()
      * @param array<int, array<string, mixed>> $traces     Row arrays from Storage::list_traces()
-     * @return array<int, array{severity: string, title: string, detail: string}>
+     * @return array<int, array<string, mixed>>
      */
     public static function analyze_dashboard(array $top_users, array $top_ips, array $traces): array
     {
@@ -74,7 +123,7 @@ class Insights
      * break admin rendering.
      *
      * @param mixed $insights
-     * @return array<int, array{severity: string, title: string, detail: string}>
+     * @return array<int, array<string, mixed>>
      */
     public static function normalize( $insights ): array
     {
@@ -103,14 +152,52 @@ class Insights
             }
 
             $severity = self::display_string( $insight['severity'] ?? 'info', 'info' );
+            $span_ids = [];
+            $raw_span_ids = isset( $insight['span_ids'] ) && is_array( $insight['span_ids'] ) ? $insight['span_ids'] : [];
+            foreach ( array_slice( $raw_span_ids, 0, self::MAX_SPAN_IDS ) as $span_id ) {
+                $span_id = self::limit_string( self::display_string( $span_id, '' ), self::MAX_SPAN_ID_BYTES );
+                if ( $span_id !== '' ) {
+                    $span_ids[] = $span_id;
+                }
+            }
+            $confidence = self::display_string( $insight['confidence'] ?? 'low', 'low' );
             $normalized[] = [
-                'severity' => $severity === 'warning' ? 'warning' : 'info',
-                'title'    => $title,
-                'detail'   => $detail,
+                'severity'            => $severity === 'warning' ? 'warning' : 'info',
+                'title'               => $title,
+                'detail'              => $detail,
+                'span_ids'            => $span_ids,
+                'source'              => self::limit_string( self::display_string( $insight['source'] ?? '', '' ), self::MAX_SOURCE_BYTES ),
+                'source_version'      => self::limit_string( self::display_string( $insight['source_version'] ?? '', '' ), self::MAX_VERSION_BYTES ),
+                'measured_impact_ms'  => max( 0.0, self::number( $insight['measured_impact_ms'] ?? 0, 0.0 ) ),
+                'evidence_count'      => max( 0, self::integer( $insight['evidence_count'] ?? 0, 0 ) ),
+                'confidence'          => in_array( $confidence, [ 'low', 'medium', 'high' ], true ) ? $confidence : 'low',
+                'required_capability' => self::limit_string( self::display_string( $insight['required_capability'] ?? '', '' ), 80 ),
+                'action_type'         => self::limit_string( self::display_string( $insight['action_type'] ?? 'investigate', 'investigate' ), 80 ),
+                'remediation'         => self::normalize_remediation( $insight['remediation'] ?? null ),
+                'verification'        => self::limit_string( self::display_string( $insight['verification'] ?? '', '' ), self::MAX_CONTRACT_BYTES ),
             ];
         }
 
         return $normalized;
+    }
+
+    /** @param mixed $remediation @return array<string, string>|null */
+    private static function normalize_remediation( $remediation ): ?array
+    {
+        if ( ! is_array( $remediation ) ) {
+            return null;
+        }
+
+        $normalized = [];
+        foreach ( array_slice( $remediation, 0, 10, true ) as $key => $value ) {
+            $key = self::limit_string( self::display_string( $key, '' ), 80 );
+            $value = self::limit_string( self::display_string( $value, '' ), self::MAX_CONTRACT_BYTES );
+            if ( $key !== '' && $value !== '' ) {
+                $normalized[ $key ] = $value;
+            }
+        }
+
+        return $normalized !== [] ? $normalized : null;
     }
 
     /**
@@ -226,6 +313,11 @@ class Insights
 
             $query_string = substr($url, $query_pos + 1);
             $query_string = self::limit_string( $query_string, 4096 );
+            $query_parts  = explode( '&', $query_string );
+            if ( count( $query_parts ) > self::MAX_PAGINATION_QUERY_PARAMS ) {
+                $query_parts = array_slice( $query_parts, 0, self::MAX_PAGINATION_QUERY_PARAMS );
+            }
+            $query_string = implode( '&', $query_parts );
             parse_str($query_string, $params);
 
             if (! isset($params['page']) || is_array($params['page']) || ! is_numeric($params['page'])) {

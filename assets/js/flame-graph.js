@@ -23,6 +23,11 @@
     var container = document.getElementById('wp-flame-graph');
     var breadcrumbsEl = document.getElementById('wp-flame-breadcrumbs');
     var tooltipEl = document.getElementById('wp-flame-tooltip');
+    var detailEl = document.getElementById('wp-flame-span-detail');
+    var searchEl = document.getElementById('wp-flame-span-search');
+    var typeFilterEl = document.getElementById('wp-flame-type-filter');
+    var sourceFilterEl = document.getElementById('wp-flame-source-filter');
+    var filterStatusEl = document.getElementById('wp-flame-filter-status');
 
     if (!container || !window.wpFlameTrace) {
         return;
@@ -113,8 +118,22 @@
             source: safeText(raw.source) || 'unknown',
             start_ms: Math.max(0, toNumber(raw.start_ms, 0)),
             duration_ms: Math.max(0, toNumber(raw.duration_ms, 0)),
+            meta: normalizeMeta(raw.meta),
             children: []
         };
+    }
+
+    function normalizeMeta(raw) {
+        var meta = Object.create(null);
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return meta;
+        var keys = Object.keys(raw).slice(0, 50);
+        for (var m = 0; m < keys.length; m++) {
+            var key = safeText(keys[m]).substring(0, 80);
+            var value = raw[keys[m]];
+            if (!key || (typeof value === 'object' && value !== null)) continue;
+            meta[key] = safeText(value).substring(0, 500);
+        }
+        return meta;
     }
 
     function wouldCreateCycle(span, parent) {
@@ -178,7 +197,7 @@
         container.appendChild(probe);
         var width = probe.offsetWidth || 800;
         container.removeChild(probe);
-        var FULL_REQUEST_ROW = 1; // extra row for "Full request" bar
+        var FULL_REQUEST_ROW = 1; // extra row for the observed request bar
         var height = (maxDepth + FULL_REQUEST_ROW) * ROW_HEIGHT + AXIS_HEIGHT + 10;
         var timeRange = viewEnd - viewStart;
         if (!isFinite(timeRange) || timeRange <= 0) {
@@ -201,11 +220,12 @@
             svgParts.push('<text x="' + tx.toFixed(1) + '" y="' + (AXIS_HEIGHT - 5) + '" fill="#888" font-size="10" font-family="monospace" text-anchor="' + anchor + '">' + tickLabel + '</text>');
         }
 
-        // "Full request" bar spanning the entire visible range
+        // Observed request bar spanning the entire visible range
         var frY = AXIS_HEIGHT;
         svgParts.push('<rect x="0" y="' + frY + '" width="' + width + '" height="' + (ROW_HEIGHT - 2) + '" fill="#e0e0e0" rx="2" />');
-        svgParts.push('<text x="4" y="' + (frY + ROW_HEIGHT - 7) + '" fill="#444" font-size="11" font-family="monospace">Full request</text>');
+        svgParts.push('<text x="4" y="' + (frY + ROW_HEIGHT - 7) + '" fill="#444" font-size="11" font-family="monospace">Observed request</text>');
 
+        var matchedCount = 0;
         function renderSpan(s, depth) {
             if (depth > MAX_RENDER_DEPTH) {
                 return;
@@ -225,8 +245,10 @@
             var color = COLORS[s.type] || COLORS.php;
             var totalMs = toNumber(trace.total_ms, 0);
             var pct = totalMs > 0 ? ((durationMs / totalMs) * 100).toFixed(1) : '0.0';
+            var matches = spanMatchesFilters(s);
+            if (matches) matchedCount++;
 
-            svgParts.push('<g class="wp-flame-span" data-id="' + escapeAttr(s.id) + '" data-name="' + escapeAttr(s.name) + '" data-duration="' + durationMs.toFixed(2) + '" data-source="' + escapeAttr(s.source) + '" data-pct="' + pct + '">');
+            svgParts.push('<g class="wp-flame-span" tabindex="' + (matches ? '0' : '-1') + '" role="button" aria-label="' + escapeAttr(s.name + ', ' + durationMs.toFixed(2) + ' milliseconds, ' + s.source) + '" data-id="' + escapeAttr(s.id) + '" data-name="' + escapeAttr(s.name) + '" data-duration="' + durationMs.toFixed(2) + '" data-source="' + escapeAttr(s.source) + '" data-pct="' + pct + '"' + (matches ? '' : ' aria-hidden="true" opacity="0.12" pointer-events="none"') + '>');
             svgParts.push('<rect x="' + x.toFixed(1) + '" y="' + y + '" width="' + w.toFixed(1) + '" height="' + (ROW_HEIGHT - 2) + '" fill="' + color + '" rx="2" />');
 
             // Text label (only if wide enough)
@@ -270,6 +292,11 @@
             groups[g].addEventListener('mouseenter', showTooltip);
             groups[g].addEventListener('mouseleave', hideTooltip);
             groups[g].addEventListener('click', handleClick);
+            groups[g].addEventListener('keydown', handleKeydown);
+        }
+
+        if (filterStatusEl) {
+            filterStatusEl.textContent = matchedCount + ' of ' + spans.length + ' spans match';
         }
 
         renderBreadcrumbs();
@@ -340,7 +367,10 @@
         var el = e.currentTarget;
         var spanId = el.getAttribute('data-id');
         var s = spanMap[spanId];
-        if (!s || s.children.length === 0) return;
+        if (!s) return;
+
+        showSpanDetail(s, true);
+        if (s.children.length === 0) return;
 
         var startMs = toNumber(s.start_ms, 0);
         var durationMs = Math.max(0, toNumber(s.duration_ms, 0));
@@ -348,6 +378,116 @@
         viewStart = startMs;
         viewEnd = startMs + durationMs;
         render();
+    }
+
+    function handleKeydown(e) {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        e.preventDefault();
+        handleClick(e);
+    }
+
+    function spanMatchesFilters(s) {
+        var query = searchEl ? safeText(searchEl.value).toLowerCase().trim() : '';
+        var type = typeFilterEl ? typeFilterEl.value : '';
+        var source = sourceFilterEl ? sourceFilterEl.value : '';
+        if (type && s.type !== type) return false;
+        if (source && s.source !== source) return false;
+        if (!query) return true;
+        var metaText = '';
+        var keys = Object.keys(s.meta);
+        for (var k = 0; k < keys.length; k++) metaText += ' ' + keys[k] + ' ' + s.meta[keys[k]];
+        return (s.name + ' ' + s.source + ' ' + s.type + metaText).toLowerCase().indexOf(query) !== -1;
+    }
+
+    function selfTime(s) {
+        var parentStart = s.start_ms;
+        var parentEnd = s.start_ms + s.duration_ms;
+        var intervals = [];
+        for (var c = 0; c < s.children.length; c++) {
+            var start = Math.max(parentStart, s.children[c].start_ms);
+            var end = Math.min(parentEnd, s.children[c].start_ms + s.children[c].duration_ms);
+            if (end > start) intervals.push([start, end]);
+        }
+        intervals.sort(function (a, b) { return a[0] - b[0]; });
+        var covered = 0;
+        var currentStart = null;
+        var currentEnd = null;
+        for (var n = 0; n < intervals.length; n++) {
+            if (currentStart === null) {
+                currentStart = intervals[n][0]; currentEnd = intervals[n][1];
+            } else if (intervals[n][0] <= currentEnd) {
+                currentEnd = Math.max(currentEnd, intervals[n][1]);
+            } else {
+                covered += currentEnd - currentStart;
+                currentStart = intervals[n][0]; currentEnd = intervals[n][1];
+            }
+        }
+        if (currentStart !== null) covered += currentEnd - currentStart;
+        return Math.max(0, s.duration_ms - covered);
+    }
+
+    function addDetailRow(list, label, value) {
+        if (value === '' || value === null || typeof value === 'undefined') return;
+        var wrapper = document.createElement('div');
+        var term = document.createElement('dt');
+        var description = document.createElement('dd');
+        term.textContent = label;
+        description.textContent = safeText(value);
+        wrapper.appendChild(term); wrapper.appendChild(description); list.appendChild(wrapper);
+    }
+
+    function showSpanDetail(s, focusPanel) {
+        if (!detailEl) return;
+        while (detailEl.firstChild) detailEl.removeChild(detailEl.firstChild);
+        var heading = document.createElement('h3');
+        heading.id = 'wp-flame-span-detail-title';
+        heading.textContent = s.name;
+        detailEl.appendChild(heading);
+        var list = document.createElement('dl');
+        var total = toNumber(trace.total_ms, 0);
+        addDetailRow(list, 'Inclusive time', s.duration_ms.toFixed(2) + ' ms (' + (total > 0 ? ((s.duration_ms / total) * 100).toFixed(1) : '0.0') + '%)');
+        addDetailRow(list, 'Self time', selfTime(s).toFixed(2) + ' ms');
+        addDetailRow(list, 'Source', s.source);
+        addDetailRow(list, 'Source version', s.meta.source_version || '');
+        addDetailRow(list, 'Observed callback', s.meta.callback || (s.meta.hook ? s.name : ''));
+        addDetailRow(list, 'Hook', s.meta.hook || '');
+        addDetailRow(list, 'Priority', s.meta.priority || '');
+        var caller = s.meta.caller_file || s.meta.file || '';
+        if (caller && (s.meta.caller_line || s.meta.line)) caller += ':' + (s.meta.caller_line || s.meta.line);
+        addDetailRow(list, 'Caller', caller);
+        addDetailRow(list, 'SQL fingerprint', s.meta.query_hash || '');
+        addDetailRow(list, 'SQL shape', s.meta.query || '');
+        addDetailRow(list, 'HTTP host', s.meta.host || '');
+        addDetailRow(list, 'HTTP method', s.meta.method || '');
+        addDetailRow(list, 'HTTP status', s.meta.status || '');
+        addDetailRow(list, 'HTTP error', s.meta.http_error_code || s.meta.http_error || '');
+        addDetailRow(list, 'Template', s.meta.template || '');
+        addDetailRow(list, 'Operation', s.meta.operation_name || s.meta.operation || '');
+        addDetailRow(list, 'Type', s.type);
+        addDetailRow(list, 'Auto-closed', s.meta.auto_closed || '');
+        addDetailRow(list, 'Truncated', s.meta.query_truncated || s.meta.graphql_query_truncated || s.meta.truncated || '');
+        detailEl.appendChild(list);
+        if (focusPanel) detailEl.focus();
+    }
+
+    function populateFilter(select, values) {
+        if (!select) return;
+        values.sort();
+        for (var v = 0; v < values.length; v++) {
+            var option = document.createElement('option');
+            option.value = values[v]; option.textContent = values[v]; select.appendChild(option);
+        }
+    }
+
+    function bindFilters() {
+        var types = Object.create(null); var sources = Object.create(null);
+        for (var f = 0; f < spans.length; f++) { types[spans[f].type] = true; sources[spans[f].source] = true; }
+        populateFilter(typeFilterEl, Object.keys(types));
+        populateFilter(sourceFilterEl, Object.keys(sources));
+        var timer;
+        if (searchEl) searchEl.addEventListener('input', function () { clearTimeout(timer); timer = setTimeout(render, 100); });
+        if (typeFilterEl) typeFilterEl.addEventListener('change', render);
+        if (sourceFilterEl) sourceFilterEl.addEventListener('change', render);
     }
 
     function zoomOut() {
@@ -394,6 +534,7 @@
         }
     }
 
+    bindFilters();
     // Initial render
     render();
 

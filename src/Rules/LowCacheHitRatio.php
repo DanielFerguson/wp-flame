@@ -54,8 +54,8 @@ class LowCacheHitRatio implements InsightRule
                 'warning',
                 /* translators: %d: cache hit ratio as a percentage */
                 sprintf(__('Low cache hit ratio (%d%%)', 'wp-flame'), $ratio),
-                /* translators: 1: number of cache misses, 2: total cache operations */
                 sprintf(
+                    /* translators: %1$d: number of cache misses, %2$d: total cache operations */
                     __('%1$d cache misses out of %2$d operations. Investigate which cache groups are missing frequently.', 'wp-flame'),
                     $misses,
                     $total

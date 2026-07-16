@@ -220,7 +220,8 @@ class TraceTest extends TestCase
         );
         $arr = $trace->toArray();
         $this->assertArrayHasKey('v', $arr);
-        $this->assertSame(1, $arr['v']);
+        $this->assertSame(Trace::SCHEMA_VERSION, $arr['v']);
+        $this->assertSame(2, $arr['v']);
     }
 
     public function test_from_array_handles_missing_version(): void
@@ -233,6 +234,8 @@ class TraceTest extends TestCase
         ];
         $trace = Trace::fromArray($data);
         $this->assertSame('test-id', $trace->id);
+        $this->assertSame('legacy', $trace->capture_report->capture_origin);
+        $this->assertContains('legacy_capture_metadata_unavailable', $trace->capture_report->incomplete_reasons);
     }
 
     public function test_from_array_tolerates_partial_or_malformed_trace_data(): void
@@ -435,5 +438,104 @@ class TraceTest extends TestCase
         $this->assertEqualsWithDelta($original->total_query_ms, $reconstructed->total_query_ms, 0.001);
         $this->assertCount(2, $reconstructed->spans);
         $this->assertSame('s2', $reconstructed->spans[1]->id);
+    }
+
+    public function test_schema_v2_capture_report_round_trips(): void
+    {
+        $trace = new Trace(
+            't-v2',
+            '/checkout',
+            'POST',
+            '2026-07-16T00:00:00+00:00',
+            125.5,
+            2048,
+            '8.3',
+            '6.8',
+            [],
+            [],
+            [
+                'capture_session_id'           => 'session-1',
+                'capture_phase'                => 'baseline',
+                'capture_origin'               => 'forced',
+                'capture_policy'               => 'one_shot_standard',
+                'request_type'                 => 'frontend',
+                'route_key'                    => 'POST /checkout',
+                'http_status'                  => 200,
+                'instrumentation_mode'         => 'standard',
+                'sample_rate'                  => 10,
+                'effective_sample_probability' => 1.0,
+                'capture_start_stage'          => 'mu_plugin',
+                'request_start_reference_ms'   => 1000000.0,
+                'unobserved_prebootstrap_ms'    => 2.5,
+                'wp_flame_version'             => '1.2.0',
+                'score_version'                => 2,
+                'environment_snapshot_id'      => 'environment-1',
+                'capabilities'                 => [
+                    'early_lifecycle' => [ 'status' => 'captured', 'reason' => '' ],
+                    'database'        => [ 'status' => 'captured', 'reason' => '' ],
+                    'callbacks'       => [ 'status' => 'not_requested', 'reason' => 'standard_mode' ],
+                    'http'            => [ 'status' => 'captured', 'reason' => '' ],
+                    'graphql'         => [ 'status' => 'not_requested', 'reason' => 'not_graphql' ],
+                    'cache_counters'  => [ 'status' => 'unavailable', 'reason' => 'counters_not_exposed' ],
+                ],
+                'incomplete_reasons'           => [ 'cache_counters_unavailable' ],
+                'dropped_span_count'           => 3,
+                'auto_closed_span_count'       => 1,
+                'trimmed_span_count'           => 2,
+                'trace_truncated'              => true,
+            ]
+        );
+
+        $data = $trace->toArray();
+        $reconstructed = Trace::fromArray($data);
+
+        $this->assertSame(125.5, $data['observed_duration_ms']);
+        $this->assertSame('session-1', $reconstructed->capture_report->capture_session_id);
+        $this->assertSame('baseline', $reconstructed->capture_report->capture_phase);
+        $this->assertSame('forced', $reconstructed->capture_report->capture_origin);
+        $this->assertSame('standard', $reconstructed->capture_report->instrumentation_mode);
+        $this->assertSame(10, $reconstructed->capture_report->sample_rate);
+        $this->assertSame(1.0, $reconstructed->capture_report->effective_sample_probability);
+        $this->assertSame('captured', $reconstructed->capture_report->capabilities['database']['status']);
+        $this->assertSame('not_requested', $reconstructed->capture_report->capabilities['callbacks']['status']);
+        $this->assertSame(3, $reconstructed->capture_report->dropped_span_count);
+        $this->assertSame(1, $reconstructed->capture_report->auto_closed_span_count);
+        $this->assertSame(2, $reconstructed->capture_report->trimmed_span_count);
+        $this->assertTrue($reconstructed->capture_report->trace_truncated);
+    }
+
+    public function test_legacy_capture_signals_migrate_without_losing_spans_or_meta(): void
+    {
+        $trace = Trace::fromArray([
+            'v'        => 1,
+            'id'       => 'legacy',
+            'total_ms' => 42.0,
+            'spans'    => [
+                [
+                    'id'          => 's1',
+                    'name'        => 'Legacy span',
+                    'type'        => Span::TYPE_CORE,
+                    'source'      => 'wordpress',
+                    'start_ms'    => 0,
+                    'duration_ms' => 42,
+                    'meta'        => [ 'auto_closed' => true ],
+                ],
+            ],
+            'meta'     => [
+                'wp_flame_dropped_spans'  => 4,
+                'wp_flame_trace_truncated' => true,
+                'custom_legacy_value'      => 'preserved',
+            ],
+        ]);
+
+        $this->assertCount(1, $trace->spans);
+        $this->assertSame('preserved', $trace->meta['custom_legacy_value']);
+        $this->assertSame('legacy', $trace->capture_report->capture_origin);
+        $this->assertSame('unavailable', $trace->capture_report->capabilities['database']['status']);
+        $this->assertSame('legacy_trace', $trace->capture_report->capabilities['database']['reason']);
+        $this->assertSame(4, $trace->capture_report->dropped_span_count);
+        $this->assertSame(1, $trace->capture_report->auto_closed_span_count);
+        $this->assertTrue($trace->capture_report->trace_truncated);
+        $this->assertSame(2, $trace->toArray()['v']);
     }
 }

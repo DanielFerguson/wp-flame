@@ -24,7 +24,6 @@ class ListView
     private const MAX_USER_LABEL_BYTES = 200;
     private const MAX_ROLE_LABEL_BYTES = 200;
     private const MAX_CALLBACK_LABEL_BYTES = 200;
-    private const MAX_DASHBOARD_SPANS_PER_TRACE = 1000;
 
     /** @var Storage */
     private $storage;
@@ -48,6 +47,8 @@ class ListView
         echo '<h1><svg width="24" height="24" viewBox="0 0 32 32" fill="none" style="vertical-align:middle;margin-right:6px"><rect x="3" y="24" width="26" height="6" rx="2" fill="#FF9632"/><rect x="5" y="17" width="22" height="6" rx="2" fill="#F07A18"/><rect x="7" y="10" width="18" height="6" rx="2" fill="#E84D30"/><rect x="10" y="3" width="12" height="6" rx="2" fill="#C23520"/></svg>' . esc_html__('WP Flame', 'wp-flame') . '</h1>';
         echo '<p><a href="' . esc_url(admin_url('options-general.php?page=wp-flame-settings')) . '">' . esc_html__('Settings', 'wp-flame') . '</a></p>';
 
+        ( new CaptureView( $this->storage ) )->render();
+
         $deleted_key = 'wp_flame_deleted_' . get_current_user_id();
         if (get_transient($deleted_key)) {
             delete_transient($deleted_key);
@@ -60,8 +61,8 @@ class ListView
         if (isset($filters['min_duration']) && isset($filters['max_duration'])) {
             $clear_url = admin_url('tools.php?page=wp-flame');
             echo '<div class="notice notice-info inline" style="margin:8px 0"><p>';
-            /* translators: %1$s: min duration, %2$s: max duration */
             echo wp_kses_post(sprintf(
+                /* translators: %1$s: min duration, %2$s: max duration */
                 __('Showing traces between <strong>%1$sms</strong> and <strong>%2$sms</strong>.', 'wp-flame'),
                 esc_html(round((float) $filters['min_duration'])),
                 esc_html(round((float) $filters['max_duration']))
@@ -71,8 +72,8 @@ class ListView
         } elseif (isset($filters['min_duration']) && !isset($filters['max_duration'])) {
             $clear_url = admin_url('tools.php?page=wp-flame');
             echo '<div class="notice notice-info inline" style="margin:8px 0"><p>';
-            /* translators: %s: min duration */
             echo wp_kses_post(sprintf(
+                /* translators: %s: min duration */
                 __('Showing traces slower than <strong>%sms</strong>.', 'wp-flame'),
                 esc_html(round((float) $filters['min_duration']))
             ));
@@ -92,8 +93,8 @@ class ListView
                 }
             }
             echo '<div class="notice notice-info inline" style="margin:8px 0"><p>';
-            /* translators: %s: user display name or ID */
             echo wp_kses_post(sprintf(
+                /* translators: %s: user display name or ID */
                 __('Showing traces for user <strong>%s</strong>.', 'wp-flame'),
                 $user_label
             ));
@@ -104,8 +105,8 @@ class ListView
         if (! empty($filters['ip_address'])) {
             $clear_url = admin_url('tools.php?page=wp-flame');
             echo '<div class="notice notice-info inline" style="margin:8px 0"><p>';
-            /* translators: %s: IP address */
             echo wp_kses_post(sprintf(
+                /* translators: %s: IP address */
                 __('Showing traces from IP <strong>%s</strong>.', 'wp-flame'),
                 esc_html($filters['ip_address'])
             ));
@@ -162,8 +163,7 @@ class ListView
                 $label = $user_data ? $this->user_display_name($user_data, $uid) : '#' . $uid;
             }
             $label .= ' (' . $this->row_int($u, 'request_count', 0, 0, PHP_INT_MAX) . ')';
-            $sel = ($current_user_filter !== '' && $current_user_filter === $uid) ? ' selected' : '';
-            echo '<option value="' . esc_attr((string) $uid) . '"' . $sel . '>' . esc_html($label) . '</option>';
+            echo '<option value="' . esc_attr((string) $uid) . '"' . selected($current_user_filter, $uid, false) . '>' . esc_html($label) . '</option>';
         }
         echo '</select>';
 
@@ -221,7 +221,7 @@ class ListView
             $next_order = ($is_active && $current_order === 'DESC') ? 'ASC' : 'DESC';
             $sort_url   = add_query_arg(array_merge($base_args, ['orderby' => $col, 'order' => $next_order]), admin_url('tools.php'));
             $arrow      = $is_active ? ($current_order === 'DESC' ? ' ▾' : ' ▴') : '';
-            echo '<th><a href="' . esc_url($sort_url) . '" style="text-decoration:none;color:inherit">' . esc_html($label) . $arrow . '</a></th>';
+            echo '<th><a href="' . esc_url($sort_url) . '" style="text-decoration:none;color:inherit">' . esc_html($label) . esc_html($arrow) . '</a></th>';
         }
 
         echo '<th>' . esc_html__('Actions', 'wp-flame') . '</th>';
@@ -469,7 +469,7 @@ class ListView
         echo '<div class="wp-flame-summary">';
 
         echo '<div class="wp-flame-stat">';
-        echo '<span class="wp-flame-stat-label">' . esc_html__('AVG LOAD TIME', 'wp-flame') . '</span>';
+        echo '<span class="wp-flame-stat-label">' . esc_html__('AVG OBSERVED DURATION', 'wp-flame') . '</span>';
         echo '<span class="wp-flame-stat-value">' . esc_html(round($stats['avg_ms'], 1)) . '<small>ms</small></span>';
         if ($trend !== '—' && $trend_class !== '') {
             echo '<span class="wp-flame-trend ' . esc_attr($trend_class) . '">' . esc_html($trend) . '</span>';
@@ -488,7 +488,11 @@ class ListView
         echo '<span class="wp-flame-stat-label">' . esc_html__('SLOWEST PAGE', 'wp-flame') . '</span>';
         echo '<span class="wp-flame-stat-value" style="font-size:14px;word-break:break-all">' . esc_html($slowest_page_url) . '</span>';
         if ($slowest_page_ms > 0) {
-            echo '<span class="wp-flame-trend">' . esc_html(sprintf(__('avg %s ms', 'wp-flame'), $slowest_page_ms)) . '</span>';
+            echo '<span class="wp-flame-trend">' . esc_html(sprintf(
+                /* translators: %s: average request duration in milliseconds */
+                __('avg %s ms', 'wp-flame'),
+                $slowest_page_ms
+            )) . '</span>';
         }
         echo '</div>';
 
@@ -510,29 +514,16 @@ class ListView
 
         echo '</div>'; // .wp-flame-summary
 
-        // Fetch and decode a bounded set of trace data once; reuse for breakdown bar and slowest callbacks.
-        $trace_data_blobs   = $this->storage->get_recent_trace_data();
-        $decoded_traces     = [];
-        foreach ($trace_data_blobs as $blob) {
-            $data = $this->decode_dashboard_trace($blob);
-            if ($data !== null) {
-                $decoded_traces[] = $data;
-            }
-        }
-
-        // Chart 2: Time Breakdown Bar
+        // Chart 2: Time Breakdown Bar. These summaries come from versioned,
+        // asynchronous rollups rather than decoding an arbitrary recent subset.
         $type_totals = ['core' => 0.0, 'plugin' => 0.0, 'theme' => 0.0, 'db' => 0.0, 'http' => 0.0];
-
-        foreach ($decoded_traces as $data) {
-            foreach ($data['spans'] as $span) {
-                if (! is_array($span)) {
-                    continue;
-                }
-
-                $type = Config::string_value($span['type'] ?? '', '');
-                if (array_key_exists($type, $type_totals)) {
-                    $type_totals[$type] += max(0.0, $this->number($span['self_ms'] ?? $span['duration_ms'] ?? 0, 0.0));
-                }
+        foreach ( $this->storage->get_rollup_type_totals( 7 ) as $row ) {
+            if ( ! is_array( $row ) ) {
+                continue;
+            }
+            $type = $this->row_string( $row, 'span_type', '', 40 );
+            if ( array_key_exists( $type, $type_totals ) ) {
+                $type_totals[ $type ] += max( 0.0, $this->row_number( $row, 'total_ms', 0.0 ) );
             }
         }
 
@@ -574,15 +565,26 @@ class ListView
         echo '</div>';
         echo '</div>'; // .wp-flame-breakdown
 
-        // Slowest callbacks ranking (reuse already-decoded traces)
-        $slowest_callbacks = $this->get_slowest_callbacks(5, $decoded_traces);
+        $rollup_population = $this->storage->get_rollup_population( 7 );
+        echo '<p class="description">' . esc_html( sprintf(
+            /* translators: 1: traces, 2: capability cohorts, 3: score versions, 4: modes, 5: rollup version, 6: pending traces */
+            __('Aggregate preview: %1$d summarized traces across %2$d capability cohort(s), %3$d score version(s), and %4$d mode(s), using rollup v%5$d; %6$d trace(s) pending. Route-specific conclusions must use compatible cohorts.', 'wp-flame'),
+            $rollup_population['sample_count'],
+            $rollup_population['capability_cohorts'],
+            $rollup_population['score_versions'],
+            $rollup_population['modes'],
+            $rollup_population['rollup_version'],
+            $rollup_population['pending']
+        ) ) . '</p>';
+
+        $slowest_callbacks = $this->storage->get_rollup_callbacks( 5, 7 );
 
         // Rankings tables
         echo '<div class="wp-flame-rankings">';
 
-        // Slowest Pages ranking
+        // Slowest observed request paths ranking
         echo '<div class="wp-flame-ranking">';
-        echo '<h3>' . esc_html__('Slowest Pages', 'wp-flame') . '</h3>';
+        echo '<h3>' . esc_html__('Slowest Request Paths', 'wp-flame') . '</h3>';
         echo '<table>';
         if (empty($slowest_pages)) {
             echo '<tr><td colspan="2">' . esc_html__('No data yet.', 'wp-flame') . '</td></tr>';
@@ -614,24 +616,61 @@ class ListView
         if (empty($slowest_callbacks)) {
             echo '<tr><td colspan="2">' . esc_html__('No data yet.', 'wp-flame') . '</td></tr>';
         } else {
-            foreach ($slowest_callbacks as $name => $total_ms) {
+            foreach ( $slowest_callbacks as $callback ) {
+                if ( ! is_array( $callback ) ) {
+                    continue;
+                }
+                $name = $this->row_string( $callback, 'callback_key', '', self::MAX_CALLBACK_LABEL_BYTES );
+                $total_ms = max( 0.0, $this->row_number( $callback, 'total_ms', 0.0 ) );
+                $evidence = $this->row_int( $callback, 'evidence_count', 0, 0, PHP_INT_MAX );
                 echo '<tr>';
                 echo '<td>' . esc_html($name) . '</td>';
-                echo '<td>' . esc_html(round((float) $total_ms, 1)) . ' ms</td>';
+                echo '<td>' . esc_html(round($total_ms, 1)) . ' ms <span style="color:#c3c4c7">(' . esc_html((string) $evidence) . 'x)</span></td>';
                 echo '</tr>';
             }
         }
         echo '</table>';
         echo '</div>'; // .wp-flame-ranking
 
-        // Chart 3: Response Time Distribution Histogram
+        // Compatible route cohorts. Each row is isolated by route, request
+        // type, mode, capability cohort, and score version.
+        $route_trends = $this->storage->get_route_cohort_trends( 7, 20 );
+        echo '<div class="wp-flame-ranking">';
+        echo '<h3>' . esc_html__('Compatible Route Cohorts', 'wp-flame') . '</h3>';
+        echo '<table>';
+        if ( empty( $route_trends ) ) {
+            echo '<tr><td>' . esc_html__('No summarized route cohorts yet.', 'wp-flame') . '</td></tr>';
+        } else {
+            foreach ( array_slice( $route_trends, 0, 5 ) as $trend_row ) {
+                if ( ! is_array( $trend_row ) ) {
+                    continue;
+                }
+                $route = $this->row_string( $trend_row, 'route_key', '', self::MAX_URL_BYTES );
+                $request_type = $this->row_string( $trend_row, 'request_type', 'unknown', 40 );
+                $mode = $this->row_string( $trend_row, 'instrumentation_mode', 'unknown', 20 );
+                $samples = $this->row_int( $trend_row, 'sample_count', 0, 0, PHP_INT_MAX );
+                $complete = $this->row_int( $trend_row, 'complete_count', 0, 0, $samples );
+                $p50 = max( 0.0, $this->row_number( $trend_row, 'p50_ms', 0.0 ) );
+                $p95 = max( 0.0, $this->row_number( $trend_row, 'p95_ms', 0.0 ) );
+                $rollup_version = $this->row_int( $trend_row, 'rollup_version', 0, 0, PHP_INT_MAX );
+                $score_version = $this->row_int( $trend_row, 'score_version', 0, 0, PHP_INT_MAX );
+                echo '<tr><td>' . esc_html( $route ) . '<br><span class="description">' . esc_html( $request_type . ' · ' . $mode ) . '</span></td>';
+                echo '<td>' . esc_html( 'p50 ≤ ' . round( $p50 ) . 'ms · p95 ≤ ' . round( $p95 ) . 'ms' );
+                echo '<br><span class="description">' . esc_html( $samples . ' samples · ' . $complete . ' complete · rollup v' . $rollup_version . ' · score v' . $score_version ) . '</span></td></tr>';
+            }
+        }
+        echo '</table>';
+        echo '<p class="description">' . esc_html__('Percentiles are bounded histogram estimates for the displayed seven-day compatible cohort; each row has one capability-cohort hash.', 'wp-flame') . '</p>';
+        echo '</div>'; // .wp-flame-ranking
+
+        // Chart 3: observed duration distribution histogram
         $distribution = $this->normalize_distribution($this->storage->get_response_time_distribution(7));
         $max_count    = max(array_map(static function (array $bucket): int {
             return $bucket['count'];
         }, $distribution) ?: [1]);
 
         echo '<div class="wp-flame-ranking">';
-        echo '<h3>' . esc_html__('Response Time Distribution', 'wp-flame') . '</h3>';
+        echo '<h3>' . esc_html__('Observed Duration Distribution', 'wp-flame') . '</h3>';
         echo '<div class="wp-flame-histogram">';
         foreach ($distribution as $bucket) {
             $pct = $max_count > 0 ? ($bucket['count'] / $max_count) * 100 : 0;
@@ -952,74 +991,6 @@ class ListView
         }
 
         return min(100, max(0, $score));
-    }
-
-    /**
-     * Build a top-N callback ranking by summing duration_ms across pre-decoded traces.
-     *
-     * @param array<int, array<string, mixed>> $decoded_traces Already-decoded trace data arrays.
-     * @return array<string, float>
-     */
-    private function get_slowest_callbacks(int $limit = 5, array $decoded_traces = []): array
-    {
-        $totals = [];
-
-        foreach ($decoded_traces as $data) {
-            if (empty($data['spans']) || ! is_array($data['spans'])) {
-                continue;
-            }
-
-            foreach ($data['spans'] as $span) {
-                if (! is_array($span)) {
-                    continue;
-                }
-
-                $meta = isset($span['meta']) && is_array($span['meta']) ? $span['meta'] : [];
-                $hook = Config::string_value($meta['hook'] ?? '', '');
-
-                // Only callback spans (those with a usable meta.hook key)
-                if ($hook === '') {
-                    continue;
-                }
-
-                $name = $this->limit_string(
-                    Config::string_value($span['name'] ?? '', ''),
-                    self::MAX_CALLBACK_LABEL_BYTES
-                );
-                if ($name === '') {
-                    continue;
-                }
-
-                $totals[$name] = ($totals[$name] ?? 0.0) + max(0.0, $this->number($span['duration_ms'] ?? 0, 0.0));
-            }
-        }
-
-        arsort($totals);
-
-        return array_slice($totals, 0, $limit, true);
-    }
-
-    /**
-     * @param mixed $blob
-     * @return array<string, mixed>|null
-     */
-    private function decode_dashboard_trace($blob): ?array
-    {
-        $blob = Config::string_value($blob, '');
-        if ($blob === '') {
-            return null;
-        }
-
-        $data = json_decode($blob, true, 32);
-        if (! is_array($data) || empty($data['spans']) || ! is_array($data['spans'])) {
-            return null;
-        }
-
-        if (count($data['spans']) > self::MAX_DASHBOARD_SPANS_PER_TRACE) {
-            $data['spans'] = array_slice($data['spans'], 0, self::MAX_DASHBOARD_SPANS_PER_TRACE);
-        }
-
-        return $data;
     }
 
     private function limit_string(string $value, int $max_bytes): string

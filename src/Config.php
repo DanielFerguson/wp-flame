@@ -16,10 +16,16 @@ class Config
     public const MAX_RETENTION_DAYS = 365;
     public const DEFAULT_MAX_SPANS = 2000;
     public const MIN_MAX_SPANS = 100;
-    public const MAX_MAX_SPANS = 50000;
+    public const MAX_MAX_SPANS = 5000;
     public const DEFAULT_MAX_TRACE_BYTES = 1048576;
     public const MIN_MAX_TRACE_BYTES = 65536;
     public const MAX_MAX_TRACE_BYTES = 8388608;
+    public const DEFAULT_STORAGE_QUOTA_ROWS = 10000;
+    public const MIN_STORAGE_QUOTA_ROWS = 100;
+    public const MAX_STORAGE_QUOTA_ROWS = 1000000;
+    public const DEFAULT_STORAGE_QUOTA_MB = 512;
+    public const MIN_STORAGE_QUOTA_MB = 16;
+    public const MAX_STORAGE_QUOTA_MB = 10240;
 
     /** @var self|null */
     private static $instance;

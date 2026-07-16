@@ -15,7 +15,7 @@ class RedactorTest extends TestCase
 
         $redacted = Redactor::redact_request_uri($uri);
 
-        $this->assertSame('/checkout/order-received/123?key=[redacted]&token=[redacted]&page=2', $redacted);
+        $this->assertSame('/checkout/order-received/[redacted]?key=[redacted]&token=[redacted]&page=2', $redacted);
     }
 
     public function test_request_uri_redacts_sensitive_path_segments(): void
@@ -36,13 +36,20 @@ class RedactorTest extends TestCase
         $this->assertSame('/profile/[redacted]/orders', $redacted);
     }
 
-    public function test_request_uri_preserves_ordinary_route_segments(): void
+    public function test_request_uri_preserves_ordinary_route_segments_but_redacts_identifier(): void
     {
         $uri = '/checkout/order-received/123?paged=2';
 
         $redacted = Redactor::redact_request_uri($uri);
 
-        $this->assertSame('/checkout/order-received/123?paged=2', $redacted);
+        $this->assertSame('/checkout/order-received/[redacted]?paged=2', $redacted);
+    }
+
+    public function test_request_uri_redacts_custom_application_identity_after_known_parent(): void
+    {
+        $redacted = Redactor::redact_request_uri('/members/jane-smith/activity');
+
+        $this->assertSame('/members/[redacted]/activity', $redacted);
     }
 
     public function test_request_uri_redacts_arrays(): void
@@ -52,6 +59,17 @@ class RedactorTest extends TestCase
         $redacted = Redactor::redact_request_uri($uri);
 
         $this->assertSame('/shop?filter%5Bemail%5D=[redacted]&filter%5Bpage%5D=[redacted]', $redacted);
+    }
+
+    public function test_request_uri_redaction_bounds_nested_query_array_depth(): void
+    {
+        $uri = '/shop?filter[level1][level2][level3][email]=customer@example.com';
+
+        $redacted = Redactor::redact_request_uri($uri);
+
+        $this->assertSame('/shop?filter%5Blevel1%5D%5Blevel2%5D=[redacted]', $redacted);
+        $this->assertStringNotContainsString('level3', $redacted);
+        $this->assertStringNotContainsString('customer%40example.com', $redacted);
     }
 
     public function test_request_uri_redacts_unsafe_query_key_names(): void
@@ -108,6 +126,14 @@ class RedactorTest extends TestCase
         $sql = "SELECT * FROM wp_users WHERE user_email = 'admin@example.com'";
 
         $this->assertSame($sql, Redactor::sql_label($sql, true));
+    }
+
+    public function test_sql_comments_are_removed_in_normalized_and_full_modes(): void
+    {
+        $sql = "SELECT '-- not a comment' AS marker /* customer@example.com */ FROM wp_users -- token=secret\nWHERE ID = 42 # private";
+
+        $this->assertSame("SELECT ? AS marker FROM wp_users WHERE ID = ?", Redactor::sql_label($sql, false));
+        $this->assertSame("SELECT '-- not a comment' AS marker FROM wp_users WHERE ID = 42", Redactor::sql_label($sql, true));
     }
 
     public function test_full_sql_label_is_bounded_even_when_enabled(): void

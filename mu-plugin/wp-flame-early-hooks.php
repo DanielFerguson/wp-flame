@@ -4,6 +4,7 @@
  *
  * This file is copied to wp-content/mu-plugins/ on plugin activation.
  * It ensures instrumentation loads before all other plugins.
+ * WP_FLAME_MU_OWNER: wp-flame-early-hooks-v1
  *
  * @package WPFlame
  */
@@ -15,7 +16,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 // Record request start as early as possible
 $wp_flame_request_start = microtime(true);
 
-define( 'WP_FLAME_MU_VERSION', '1.2.0' );
+define( 'WP_FLAME_MU_VERSION', '1.3.0-rc.1' );
 
 if ( ! function_exists( 'wp_flame_mu_string_value' ) ) {
     function wp_flame_mu_string_value( $value, string $fallback = '' ): string {
@@ -151,13 +152,15 @@ if ( ! function_exists( 'wp_flame_mu_has_non_cookie_auth' ) ) {
 
 if ( ! function_exists( 'wp_flame_mu_force_cookie_can_bypass_early_guards' ) ) {
     function wp_flame_mu_force_cookie_can_bypass_early_guards( array $cookies, array $server ): bool {
-        $value = $cookies['wp_flame_force_trace'] ?? '';
+        $is_session_cookie = ! isset( $cookies['wp_flame_force_trace'] ) && isset( $cookies['wp_flame_capture_session'] );
+        $value = $cookies['wp_flame_force_trace'] ?? ( $cookies['wp_flame_capture_session'] ?? '' );
         if ( ! is_scalar( $value ) ) {
             return false;
         }
 
         $nonce = trim( wp_flame_mu_string_value( $value, '' ) );
-        if ( $nonce === '' || strlen( $nonce ) > 128 ) {
+        $max_bytes = $is_session_cookie ? 180 : 128;
+        if ( $nonce === '' || strlen( $nonce ) > $max_bytes ) {
             return false;
         }
 
@@ -190,15 +193,20 @@ if ( ! $wp_flame_is_active ) {
 // Avoid allocating spans at all when tracing is disabled or this request misses
 // sampling. Audience and capability checks still happen later in the main
 // plugin, after WordPress has loaded more of the current user stack.
-$wp_flame_enabled = wp_flame_mu_boolean( get_option( 'wp_flame_enabled', true ) );
+$wp_flame_force_cookie_present = wp_flame_mu_force_cookie_can_bypass_early_guards( $_COOKIE, $_SERVER );
+$wp_flame_enabled = wp_flame_mu_boolean( get_option( 'wp_flame_enabled', false ) );
 
-if ( ! $wp_flame_enabled ) {
+if ( ! $wp_flame_enabled && ! $wp_flame_force_cookie_present ) {
     $GLOBALS['wp_flame_should_instrument_request'] = false;
     return;
 }
 
 $wp_flame_sample_rate = wp_flame_mu_bounded_int( get_option( 'wp_flame_sample_rate', 1 ), 1, 1, 1000000 );
-$wp_flame_force_cookie_present = wp_flame_mu_force_cookie_can_bypass_early_guards( $_COOKIE, $_SERVER );
+$wp_flame_capture_paused = wp_flame_mu_string_value( get_option( 'wp_flame_capture_paused_reason', '' ), '' ) === 'storage_quota';
+if ( $wp_flame_capture_paused && ! $wp_flame_force_cookie_present ) {
+    $GLOBALS['wp_flame_should_instrument_request'] = false;
+    return;
+}
 $wp_flame_is_cron_request = defined( 'DOING_CRON' ) && DOING_CRON;
 $wp_flame_is_cli_request  = defined( 'WP_CLI' ) && WP_CLI;
 $wp_flame_trace_audience  = wp_flame_mu_string_value( get_option( 'wp_flame_trace_audience', 'admins' ), 'admins' );
@@ -242,23 +250,33 @@ if ( ! file_exists( $wp_flame_autoload ) ) {
 }
 require_once $wp_flame_autoload;
 
+// An application-package rollback can briefly pair this newer loader with an
+// older main package. Fail safely when its core classes are absent, and use
+// the legacy Bootstrap label when the versioned Lifecycle helper is not yet
+// available. The older plugin can then restore its own loader at plugins_loaded.
+if ( ! class_exists( WPFlame\Collector::class ) || ! class_exists( WPFlame\Span::class ) ) {
+    return;
+}
+$wp_flame_initial_phase = class_exists( WPFlame\Lifecycle::class )
+    ? WPFlame\Lifecycle::initial_phase( true )
+    : 'Bootstrap';
+
 // Initialize collector with the precise start time
 $collector = WPFlame\Collector::instance();
 $collector->start_request( $wp_flame_request_start );
 
 // Start the Bootstrap phase span
-$wp_flame_bootstrap_id = $collector->start_span( 'Bootstrap', WPFlame\Span::TYPE_CORE, 'wordpress' );
+$wp_flame_bootstrap_id = $collector->start_span( $wp_flame_initial_phase, WPFlame\Span::TYPE_CORE, 'wordpress' );
 
 // Store the current phase span ID so we can close it at the next transition
 $GLOBALS['wp_flame_current_phase_id'] = $wp_flame_bootstrap_id;
 
 // Register early universal phase transitions only.
-// Late phases (init, wp, template_redirect) are registered by wp_flame_init()
+// Request-specific phases are registered by wp_flame_init().
 // based on request type (frontend/REST/admin/AJAX/CLI/cron).
 $wp_flame_phases = [
     'muplugins_loaded'   => 'Plugin Load',
     'plugins_loaded'     => 'Theme Setup',
-    'after_setup_theme'  => 'Init',
 ];
 
 foreach ( $wp_flame_phases as $hook => $next_phase_name ) {

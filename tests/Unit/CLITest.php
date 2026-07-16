@@ -286,15 +286,21 @@ namespace WPFlame\Tests\Unit {
         {
             $storage = $this->getMockBuilder(Storage::class)
                 ->disableOriginalConstructor()
-                ->onlyMethods(['prune_old'])
+                ->onlyMethods(['run_retention_cleanup'])
                 ->getMock();
 
             $storage->expects($this->once())
-                ->method('prune_old')
-                ->with(Config::MAX_RETENTION_DAYS);
+                ->method('run_retention_cleanup')
+                ->with(Config::MAX_RETENTION_DAYS, 5000)
+                ->willReturn(['deleted' => 42, 'backlog' => false]);
 
             $cli = new CLI($storage);
             $cli->prune([], ['days' => Config::MAX_RETENTION_DAYS + 1000]);
+
+            $this->assertSame(
+                [['success', 'Pruned 42 trace(s) older than ' . Config::MAX_RETENTION_DAYS . ' day(s).']],
+                $GLOBALS['wp_flame_test_cli_messages']
+            );
         }
 
         public function test_prune_bounds_retention_option_default(): void
@@ -305,15 +311,99 @@ namespace WPFlame\Tests\Unit {
 
             $storage = $this->getMockBuilder(Storage::class)
                 ->disableOriginalConstructor()
-                ->onlyMethods(['prune_old'])
+                ->onlyMethods(['run_retention_cleanup'])
                 ->getMock();
 
             $storage->expects($this->once())
-                ->method('prune_old')
-                ->with(Config::MAX_RETENTION_DAYS);
+                ->method('run_retention_cleanup')
+                ->with(Config::MAX_RETENTION_DAYS, 5000)
+                ->willReturn(['deleted' => Storage::PRUNE_BATCH_LIMIT, 'backlog' => true]);
 
             $cli = new CLI($storage);
             $cli->prune([], []);
+
+            $this->assertSame(
+                [
+                    ['success', 'Pruned ' . Storage::PRUNE_BATCH_LIMIT . ' trace(s) older than ' . Config::MAX_RETENTION_DAYS . ' day(s).'],
+                    ['log', 'Expired traces remain. Rerun with --until-complete or increase --max-runs.'],
+                ],
+                $GLOBALS['wp_flame_test_cli_messages']
+            );
+        }
+
+        public function test_migrate_until_complete_runs_bounded_steps(): void
+        {
+            $storage = $this->getMockBuilder(Storage::class)
+                ->disableOriginalConstructor()
+                ->onlyMethods(['maybe_upgrade'])
+                ->getMock();
+
+            $storage->expects($this->exactly(2))
+                ->method('maybe_upgrade')
+                ->willReturnOnConsecutiveCalls(
+                    ['status' => 'pending', 'current' => 1, 'target' => 4, 'processed' => 500, 'message' => 'more'],
+                    ['status' => 'complete', 'current' => 4, 'target' => 4, 'processed' => 10, 'message' => '']
+                );
+
+            $cli = new CLI($storage);
+            $cli->migrate([], ['until-complete' => true, 'max-runs' => 2]);
+
+            $this->assertSame(
+                [['success', 'WP Flame schema is current at version 4. Processed 510 legacy row(s).']],
+                $GLOBALS['wp_flame_test_cli_messages']
+            );
+        }
+
+        public function test_support_bundle_is_redacted_by_default(): void
+        {
+            $GLOBALS['wp_flame_test_options'] = [
+                'active_plugins'                       => [ 'store/store.php', 'builder/builder.php' ],
+                'wp_flame_schema_version'              => Storage::SCHEMA_VERSION,
+                'wp_flame_enabled'                     => true,
+                'wp_flame_instrumentation_mode'        => 'standard',
+                'wp_flame_sensitive_data_acknowledged' => true,
+                'wp_flame_mu_plugin_state'             => 'current',
+            ];
+
+            $storage = $this->getMockBuilder(Storage::class)
+                ->disableOriginalConstructor()
+                ->onlyMethods(['get_storage_health', 'migration_health', 'rollup_health', 'table_health', 'persistence_health'])
+                ->getMock();
+            $storage->method('get_storage_health')->willReturn([
+                'count' => 12,
+                'bytes' => 3456,
+                'quota' => ['reached' => false],
+            ]);
+            $storage->method('migration_health')->willReturn([
+                'status' => 'complete',
+                'current' => Storage::SCHEMA_VERSION,
+                'target' => Storage::SCHEMA_VERSION,
+            ]);
+            $storage->method('rollup_health')->willReturn(['pending' => 2]);
+            $storage->method('table_health')->willReturn(['status' => 'ready', 'message' => 'secret-path']);
+            $storage->method('persistence_health')->willReturn([
+                'count' => 0,
+                'last_status' => 'stored',
+                'last_at' => '2026-07-16 00:00:00',
+            ]);
+
+            $cli = new CLI($storage);
+            $cli->support_bundle([], []);
+
+            $payload = json_decode($GLOBALS['wp_flame_test_cli_messages'][0][1], true);
+            $this->assertIsArray($payload);
+            $this->assertSame('wp-flame-support.v1', $payload['schema']);
+            $this->assertTrue($payload['redacted']);
+            $this->assertFalse($payload['components']['details_included']);
+            $this->assertSame(2, $payload['components']['active_plugin_count']);
+            $this->assertFalse($payload['external_requests']['licensing_present']);
+            $encoded = json_encode($payload);
+            $this->assertIsString($encoded);
+            $this->assertStringNotContainsString('store/store.php', $encoded);
+            $this->assertStringNotContainsString('secret-path', $encoded);
+            foreach (['site_url', 'trace_rows', 'request_paths', 'sql', 'http_urls', 'user_ids', 'ip_addresses', 'license_data'] as $excluded) {
+                $this->assertContains($excluded, $payload['excludes']);
+            }
         }
     }
 }

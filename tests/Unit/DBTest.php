@@ -55,6 +55,11 @@ namespace {
     {
         public string $uninitialized;
     }
+
+    #[\AllowDynamicProperties]
+    class WPFlame_Dynamic_WPDB extends wpdb
+    {
+    }
 }
 
 namespace WPFlame\Tests\Unit {
@@ -79,6 +84,18 @@ namespace WPFlame\Tests\Unit {
 
             $this->assertInstanceOf(DB::class, $db);
             $this->assertSame('wp_', $db->prefix);
+        }
+
+        public function test_from_wpdb_preserves_runtime_public_plugin_properties(): void
+        {
+            $collector = Collector::instance();
+            $collector->start_request(1000.0);
+            $original = new \WPFlame_Dynamic_WPDB();
+            $original->wc_tax_rate_classes = 'wp_wc_tax_rate_classes';
+
+            $db = DB::from_wpdb($original, $collector);
+
+            $this->assertSame('wp_wc_tax_rate_classes', $db->wc_tax_rate_classes);
         }
 
         public function test_query_tolerates_non_string_values_before_delegating_to_wpdb(): void
@@ -126,6 +143,31 @@ namespace WPFlame\Tests\Unit {
             $this->assertSame(Redactor::MAX_SQL_LABEL_BYTES, strlen($trace->spans[0]->meta['query']));
             $this->assertTrue($trace->spans[0]->meta['query_truncated']);
             $this->assertFalse($trace->spans[0]->meta['query_redacted']);
+        }
+
+        public function test_query_after_collector_stops_delegates_without_creating_spans(): void
+        {
+            $collector = Collector::instance();
+            $collector->start_request(1000.0);
+            $db = DB::from_wpdb(new \wpdb(), $collector, true);
+            $collector->stop(1000.1);
+
+            $this->assertSame(0, $db->query('SELECT ' . str_repeat('sensitive ', 1000)));
+            $this->assertCount(0, $collector->get_trace()->spans);
+        }
+
+        public function test_failed_query_records_only_a_bounded_failure_signal(): void
+        {
+            $collector = Collector::instance();
+            $collector->start_request(1000.0);
+            $original = new \wpdb();
+            $original->query_result = false;
+            $db = DB::from_wpdb($original, $collector);
+
+            $this->assertFalse($db->query('SELECT secret FROM private_table'));
+            $trace = $collector->get_trace();
+            $this->assertTrue($trace->spans[0]->meta['query_failed']);
+            $this->assertArrayNotHasKey('error', $trace->spans[0]->meta);
         }
     }
 }

@@ -141,7 +141,24 @@ namespace WPFlame\Tests\Unit {
 
         private function render_notices(): string
         {
-            $admin = new Admin($this->createMock(Storage::class));
+            $storage = $this->createMock(Storage::class);
+            $storage->method('table_health')->willReturn(['status' => 'ready', 'message' => '']);
+            $storage->method('migration_health')->willReturn([
+                'status' => 'complete', 'current' => Storage::SCHEMA_VERSION,
+                'target' => Storage::SCHEMA_VERSION, 'processed' => 0,
+                'message' => '', 'updated_at' => '',
+            ]);
+            $storage->method('get_storage_health')->willReturn([
+                'count' => 0, 'bytes' => 0, 'quota' => ['reached' => false],
+                'oldest_expired' => '', 'last_cleanup' => [], 'last_cleanup_at' => '',
+                'capture_paused' => false,
+            ]);
+            $storage->method('persistence_health')->willReturn(['count' => 0, 'last_status' => '', 'last_at' => '']);
+            $storage->method('rollup_health')->willReturn([
+                'version' => 1, 'pending' => 0, 'last_result' => [],
+                'last_at' => '', 'last_failure' => [],
+            ]);
+            $admin = new Admin($storage);
 
             ob_start();
             $admin->render_notices();

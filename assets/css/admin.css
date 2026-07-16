@@ -10,6 +10,44 @@
     border-radius: 4px;
 }
 
+.wp-flame-capture-report {
+    margin: 16px 0;
+    padding: 16px;
+    border: 1px solid #c3c4c7;
+    border-radius: 4px;
+    background: #fff;
+}
+
+.wp-flame-capture-report h2,
+.wp-flame-capture-report h3 {
+    margin-top: 0;
+}
+
+.wp-flame-capture-report dl {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 8px 16px;
+}
+
+.wp-flame-capture-report dt {
+    color: #646970;
+    font-size: 12px;
+    text-transform: uppercase;
+}
+
+.wp-flame-capture-report dd {
+    margin: 2px 0 0;
+    font-weight: 600;
+}
+
+.wp-flame-capture-complete {
+    color: #008a20;
+}
+
+.wp-flame-capture-incomplete {
+    color: #b32d2e;
+}
+
 .wp-flame-stat {
     display: flex;
     flex-direction: column;
@@ -147,6 +185,62 @@
 }
 
 /* Insights panel */
+.wp-flame-guided-capture,
+.wp-flame-graph-tools {
+    margin: 18px 0;
+    padding: 18px;
+    border: 1px solid #c3c4c7;
+    border-radius: 8px;
+    background: #fff;
+}
+
+.wp-flame-guided-heading,
+.wp-flame-capture-options,
+.wp-flame-session,
+.wp-flame-graph-filters {
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+}
+
+.wp-flame-guided-heading { justify-content: space-between; }
+.wp-flame-guided-heading h2 { margin-top: 0; }
+.wp-flame-health { min-width: 210px; padding: 10px 12px; border-left: 4px solid #d63638; background: #f6f7f7; }
+.wp-flame-health.is-ready { border-left-color: #00a32a; }
+.wp-flame-health span { display: block; margin-top: 4px; font-size: 12px; }
+.wp-flame-capture-option { flex: 1; padding: 14px; border: 1px solid #dcdcde; border-radius: 6px; }
+.wp-flame-capture-option label { display: block; margin: 10px 0; }
+.wp-flame-session-list { display: grid; gap: 8px; }
+.wp-flame-session { align-items: center; padding: 10px; background: #f6f7f7; }
+.wp-flame-session > div { min-width: 190px; }
+.wp-flame-session span { display: block; color: #50575e; }
+.wp-flame-session progress { flex: 1; min-width: 120px; }
+.wp-flame-session form { margin-left: auto; }
+.wp-flame-top-opportunities { margin: 18px 0; }
+.wp-flame-top-opportunities > h2 { margin-bottom: 4px; }
+.wp-flame-opportunity-rank { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%; background: #1d2327; color: #fff; }
+.wp-flame-opportunity-evidence { font-weight: 600; }
+.wp-flame-graph-filters { flex-wrap: wrap; align-items: end; margin-bottom: 12px; }
+.wp-flame-graph-filters label { display: grid; gap: 4px; font-weight: 600; }
+#wp-flame-filter-status { padding: 7px 0; color: #50575e; }
+.wp-flame-span:focus rect { stroke: #fff; stroke-width: 2; }
+.wp-flame-span-detail { margin-top: 14px; padding: 14px; border: 1px solid #dcdcde; border-radius: 6px; background: #f6f7f7; }
+.wp-flame-span-detail:focus { outline: 2px solid #2271b1; outline-offset: 2px; }
+.wp-flame-span-detail dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px 16px; }
+.wp-flame-span-detail dt { font-weight: 600; }
+.wp-flame-span-detail dd { margin: 2px 0 0; overflow-wrap: anywhere; }
+
+@media (max-width: 782px) {
+    .wp-flame-guided-heading,
+    .wp-flame-capture-options,
+    .wp-flame-session { flex-direction: column; }
+    .wp-flame-health { min-width: 0; }
+    .wp-flame-session progress { width: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .wp-flame-svg *, .wp-flame-span * { transition: none !important; animation: none !important; }
+}
 .wp-flame-insights {
     margin: 16px 0;
 }

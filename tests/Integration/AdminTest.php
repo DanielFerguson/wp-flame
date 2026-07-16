@@ -2,6 +2,7 @@
 
 namespace WPFlame\Tests\Integration;
 
+use WPDieException;
 use WP_UnitTestCase;
 use WPFlame\Admin;
 use WPFlame\Storage;
@@ -24,11 +25,16 @@ class AdminTest extends WP_UnitTestCase
     {
         global $wpdb;
         $wpdb->query("DROP TABLE IF EXISTS {$wpdb->prefix}flame_traces");
+        $wpdb->query("DROP TABLE IF EXISTS {$wpdb->prefix}flame_sessions");
+        $wpdb->query("DROP TABLE IF EXISTS {$wpdb->prefix}flame_environments");
         parent::tear_down();
     }
 
     public function test_register_adds_admin_menu(): void
     {
+        $user_id = self::factory()->user->create(['role' => 'administrator']);
+        wp_set_current_user($user_id);
+
         $this->admin->register();
 
         // Simulate admin_menu hook
@@ -56,9 +62,9 @@ class AdminTest extends WP_UnitTestCase
         $_POST['wp_flame_delete_trace'] = 'trace-123';
         $_POST['_wpnonce'] = 'invalid';
 
-        // Should not crash, just skip
-        $this->admin->handle_delete();
+        $this->expectException(WPDieException::class);
+        $this->expectExceptionMessage('The link you followed has expired.');
 
-        $this->assertTrue(true);
+        $this->admin->handle_delete();
     }
 }

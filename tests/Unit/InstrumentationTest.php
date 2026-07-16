@@ -18,9 +18,10 @@ class InstrumentationTest extends TestCase
         Collector::reset();
     }
 
-    public function test_disabled_plugin_never_instruments(): void
+    public function test_disabled_automatic_capture_still_allows_authorized_manual_trace(): void
     {
-        $this->assertFalse(Instrumentation::should_instrument(false, 'everyone', 1, true, true, true, true, 1));
+        $this->assertTrue(Instrumentation::should_instrument(false, 'everyone', 1, true, false, true, true, 1));
+        $this->assertFalse(Instrumentation::should_instrument(false, 'everyone', 1, false, true, true, true, 1));
     }
 
     public function test_cron_bypasses_audience_and_sampling(): void
@@ -73,6 +74,22 @@ class InstrumentationTest extends TestCase
         $this->assertFalse(Instrumentation::is_force_trace_request('valid-nonce', false, true, $verifier));
         $this->assertFalse(Instrumentation::is_force_trace_request('valid-nonce', true, false, $verifier));
         $this->assertFalse(Instrumentation::is_force_trace_request(['valid-nonce'], true, true, $verifier));
+        $this->assertFalse(Instrumentation::is_force_trace_request(str_repeat('a', 129), true, true, $verifier));
+    }
+
+    public function test_capture_session_cookie_is_admin_bound_and_session_specific(): void
+    {
+        $id = '123e4567-e89b-12d3-a456-426614174000';
+        $verifier = static function (string $nonce, string $action) use ($id): bool {
+            return $nonce === 'valid-nonce'
+                && $action === Instrumentation::CAPTURE_SESSION_NONCE_PREFIX . $id;
+        };
+
+        $this->assertSame($id, Instrumentation::capture_session_id_from_cookie($id . '.valid-nonce', true, true, $verifier));
+        $this->assertSame('', Instrumentation::capture_session_id_from_cookie($id . '.bad', true, true, $verifier));
+        $this->assertSame('', Instrumentation::capture_session_id_from_cookie($id . '.valid-nonce', false, true, $verifier));
+        $this->assertSame('', Instrumentation::capture_session_id_from_cookie(['bad'], true, true, $verifier));
+        $this->assertSame('', Instrumentation::capture_session_id_from_cookie('not-a-uuid.valid-nonce', true, true, $verifier));
     }
 
     public function test_force_trace_cookie_delete_options_match_hardened_cookie_attributes(): void
@@ -85,14 +102,19 @@ class InstrumentationTest extends TestCase
         );
         $after = time() - 3600;
 
-        $this->assertCount(2, $options);
+        $this->assertCount(4, $options);
         $this->assertSame('/', $options[0]['path']);
-        $this->assertSame('/wp-admin', $options[1]['path']);
+        $this->assertSame('/', $options[1]['path']);
+        $this->assertSame('/wp-admin', $options[2]['path']);
+        $this->assertSame('/wp-admin', $options[3]['path']);
+        $this->assertSame('.example.test', $options[0]['domain']);
+        $this->assertSame('', $options[1]['domain']);
+        $this->assertSame('.example.test', $options[2]['domain']);
+        $this->assertSame('', $options[3]['domain']);
 
         foreach ($options as $option) {
             $this->assertGreaterThanOrEqual($before - 1, $option['expires']);
             $this->assertLessThanOrEqual($after + 1, $option['expires']);
-            $this->assertSame('.example.test', $option['domain']);
             $this->assertTrue($option['secure']);
             $this->assertTrue($option['httponly']);
             $this->assertSame('Strict', $option['samesite']);
@@ -107,9 +129,43 @@ class InstrumentationTest extends TestCase
         $this->assertSame('', $options[0]['domain']);
     }
 
+    public function test_force_trace_cookie_delete_options_are_bounded(): void
+    {
+        $options = Instrumentation::force_trace_cookie_delete_options(
+            [
+                '/',
+                '/wp-admin',
+                '/customer-area',
+                str_repeat('/a', 200),
+                '/shop',
+                '/extra',
+            ],
+            str_repeat('d', 254),
+            true
+        );
+
+        $this->assertCount(4, $options);
+        $this->assertSame(['/', '/wp-admin', '/customer-area', '/shop'], array_column($options, 'path'));
+        $this->assertSame('', $options[0]['domain']);
+    }
+
+    public function test_force_trace_cookie_delete_options_cap_paths_before_domain_variants(): void
+    {
+        $options = Instrumentation::force_trace_cookie_delete_options(
+            ['/', '/a', '/b', '/c', '/d'],
+            '.example.test',
+            true
+        );
+
+        $this->assertCount(8, $options);
+        $this->assertSame(['/', '/', '/a', '/a', '/b', '/b', '/c', '/c'], array_column($options, 'path'));
+        $this->assertSame(['.example.test', '', '.example.test', '', '.example.test', '', '.example.test', ''], array_column($options, 'domain'));
+    }
+
     public function test_notice_trace_id_bounds_transient_values_for_admin_links(): void
     {
         $this->assertSame('', Instrumentation::notice_trace_id(['bad']));
+        $this->assertSame('', Instrumentation::notice_trace_id(0));
         $this->assertSame('', Instrumentation::notice_trace_id('   '));
         $this->assertSame('trace-1', Instrumentation::notice_trace_id(' trace-1 '));
         $this->assertSame(128, strlen(Instrumentation::notice_trace_id(str_repeat('t', 300))));
@@ -323,8 +379,8 @@ class InstrumentationTest extends TestCase
 
         $meta = Instrumentation::cache_meta($cache);
 
-        $this->assertSame(0, $meta['cache_hits']);
-        $this->assertSame(0, $meta['cache_misses']);
+        $this->assertArrayNotHasKey('cache_hits', $meta);
+        $this->assertArrayNotHasKey('cache_misses', $meta);
         $this->assertSame(get_class($cache), $meta['cache_backend']);
     }
 
@@ -346,16 +402,44 @@ class InstrumentationTest extends TestCase
         $result = Instrumentation::register_instrumentors(
             [$db, $graphql, $other],
             $collector,
-            function () use (&$savequeries_defined): void {
+            function () use (&$savequeries_defined): bool {
                 $savequeries_defined = true;
+                return true;
             }
         );
 
         $this->assertTrue($result['graphql_active']);
+        $this->assertTrue($result['graphql_db_active']);
         $this->assertTrue($savequeries_defined);
         $this->assertTrue($graphql->registered);
         $this->assertFalse($db->registered);
         $this->assertTrue($other->registered);
+        $this->assertSame('registered', $result['statuses'][TestGraphQL::class]);
+        $this->assertSame('superseded', $result['statuses'][TestDbInstrumentor::class]);
+    }
+
+    public function test_graphql_registration_uses_core_db_fallback_when_savequeries_is_predefined_false(): void
+    {
+        $collector = Collector::instance();
+        $collector->start_request(1000.0);
+
+        $db = new TestDbInstrumentor();
+        $graphql = new TestGraphQL(true);
+
+        $result = Instrumentation::register_instrumentors(
+            [$db, $graphql],
+            $collector,
+            static function (): bool {
+                return false;
+            }
+        );
+
+        $this->assertTrue($result['graphql_active']);
+        $this->assertFalse($result['graphql_db_active']);
+        $this->assertTrue($graphql->registered);
+        $this->assertTrue($db->registered);
+        $this->assertSame('registered', $result['statuses'][TestGraphQL::class]);
+        $this->assertSame('registered', $result['statuses'][TestDbInstrumentor::class]);
     }
 
     public function test_graphql_registration_does_not_define_savequeries_when_not_required(): void
@@ -411,6 +495,7 @@ class InstrumentationTest extends TestCase
 
         $this->assertTrue($other->registered);
         $this->assertSame([TestOtherInstrumentor::class], $result['registered']);
+        $this->assertSame('failed', $result['statuses'][TestThrowingInstrumentor::class]);
     }
 
     public function test_graphql_registration_failure_does_not_block_db_fallback(): void
@@ -426,6 +511,7 @@ class InstrumentationTest extends TestCase
         $this->assertFalse($result['graphql_active']);
         $this->assertTrue($db->registered);
         $this->assertSame([TestDbInstrumentor::class], $result['registered']);
+        $this->assertSame('failed', $result['statuses'][TestThrowingGraphQL::class]);
     }
 }
 

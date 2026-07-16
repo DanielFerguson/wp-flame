@@ -230,4 +230,33 @@ class FlameGraphViewTest extends TestCase
 
         $this->assertSame(200, strlen($label));
     }
+
+    public function test_capture_report_discloses_capabilities_and_incomplete_reasons_safely(): void
+    {
+        $trace = new Trace(
+            'trace-report', '/', 'GET', '2026-07-16T00:00:00+00:00', 25, 1024, '8.3', '6.8', [], [], [
+                'capture_origin'       => 'forced',
+                'request_type'         => 'frontend',
+                'instrumentation_mode' => 'standard',
+                'capture_start_stage'  => 'plugins_loaded',
+                'capabilities'         => [
+                    'database' => [ 'status' => 'unavailable', 'reason' => 'unsupported_database' ],
+                    'http'     => [ 'status' => 'captured', 'reason' => '' ],
+                ],
+                'incomplete_reasons'   => [ 'database_unavailable<script>' ],
+            ]
+        );
+        $view = new FlameGraphView($this->createMock(Storage::class));
+        $method = new ReflectionMethod(FlameGraphView::class, 'capture_report_html');
+        $method->setAccessible(true);
+
+        $html = $method->invoke($view, $trace);
+
+        $this->assertStringContainsString('Capture report', $html);
+        $this->assertStringContainsString('Incomplete capture', $html);
+        $this->assertStringContainsString('<strong>Database:</strong> Unavailable', $html);
+        $this->assertStringContainsString('<strong>Http:</strong> Captured', $html);
+        $this->assertStringContainsString('database unavailable&lt;script&gt;', $html);
+        $this->assertStringNotContainsString('database_unavailable<script>', $html);
+    }
 }

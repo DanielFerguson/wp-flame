@@ -12,9 +12,6 @@ class CallbackInstrumentor implements Instrumentor
 {
     private const MAX_HOOK_NAME_BYTES = 160;
     private const MAX_CALLBACK_ID_BYTES = 220;
-    private const MAX_CALLBACK_NAME_BYTES = 300;
-    private const MAX_SOURCE_TYPE_BYTES = 40;
-    private const MAX_SOURCE_BYTES = 200;
 
     /** @var Config */
     private $config;
@@ -115,34 +112,26 @@ class CallbackInstrumentor implements Instrumentor
 
                     $original = $the_['function'];
                     if ( ! is_callable( $original ) ) {
+                        $this->record_wrap_limitation( 'non_callable' );
                         continue;
                     }
 
                     $accepted_args = Config::bounded_int( $the_['accepted_args'] ?? PHP_INT_MAX, PHP_INT_MAX, 0, PHP_INT_MAX );
                     if ( CallbackResolver::accepts_reference_parameters( $original, $accepted_args ) ) {
+                        $this->record_wrap_limitation( 'reference_parameter' );
                         continue;
                     }
 
                     if ( CallbackResolver::returns_reference( $original ) ) {
+                        $this->record_wrap_limitation( 'reference_return' );
                         continue;
                     }
 
-                    // Skip our own plugin's callbacks to avoid self-instrumentation
                     $callback_id = $this->callback_cache_id( $id );
-                    $source = $this->normalize_source( CallbackResolver::resolve_source( $callback_id, $original, $collector ) );
-                    if ( strpos( $source['source'], 'wp-flame' ) !== false || $source['source'] === 'wordpress-apm-plugin' ) {
-                        continue;
-                    }
-
-                    $name = $this->bounded_label(
-                        CallbackResolver::resolve_name( $callback_id, $original ),
-                        self::MAX_CALLBACK_NAME_BYTES,
-                        $callback_id !== '' ? $callback_id : 'callback'
-                    );
 
                     $hook_instance->callbacks[ $priority ][ $id ]['function'] = new CallbackWrapper(
                         $original, $collector, $hook_name, Config::bounded_int( $priority, 0, -1000000, 1000000 ),
-                        $name, $source, $min_ms
+                        '', [], $min_ms, $callback_id
                     );
                 }
             }
@@ -175,15 +164,12 @@ class CallbackInstrumentor implements Instrumentor
         return strlen( $value ) <= $max_bytes ? $value : substr( $value, 0, $max_bytes );
     }
 
-    /**
-     * @param array<string, mixed> $source
-     * @return array{type: string, source: string}
-     */
-    private function normalize_source( array $source ): array
+    private function record_wrap_limitation( string $reason ): void
     {
-        return [
-            'type'   => $this->bounded_label( $source['type'] ?? Span::TYPE_PHP, self::MAX_SOURCE_TYPE_BYTES, Span::TYPE_PHP ),
-            'source' => $this->bounded_label( $source['source'] ?? 'unknown', self::MAX_SOURCE_BYTES, 'unknown' ),
-        ];
+        if ( ! isset( $GLOBALS['wp_flame_callback_wrap_limitations'] ) || ! is_array( $GLOBALS['wp_flame_callback_wrap_limitations'] ) ) {
+            $GLOBALS['wp_flame_callback_wrap_limitations'] = [];
+        }
+        $current = Config::bounded_int( $GLOBALS['wp_flame_callback_wrap_limitations'][ $reason ] ?? 0, 0, 0, 1000000 );
+        $GLOBALS['wp_flame_callback_wrap_limitations'][ $reason ] = min( 1000000, $current + 1 );
     }
 }

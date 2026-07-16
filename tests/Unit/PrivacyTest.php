@@ -59,7 +59,7 @@ class PrivacyTest extends TestCase
             ->method('list_traces')
             ->with([
                 'user_id'  => 123,
-                'per_page' => 50,
+                'per_page' => 10,
                 'page'     => 1,
             ])
             ->willReturn([
@@ -74,7 +74,7 @@ class PrivacyTest extends TestCase
                     'ip_address' => null,
                 ],
         ]);
-        $storage->expects($this->never())->method('get_trace');
+        $storage->expects($this->once())->method('get_trace')->with('trace-1')->willReturn(null);
 
         $warnings = [];
         set_error_handler(static function (int $errno, string $errstr) use (&$warnings): bool {
@@ -95,8 +95,9 @@ class PrivacyTest extends TestCase
         $this->assertTrue($result['done']);
         $this->assertCount(1, $result['data']);
         $this->assertSame('trace-trace-1', $result['data'][0]['item_id']);
-        $this->assertSame('', $result['data'][0]['data'][0]['value']);
-        $this->assertSame('12.5', $result['data'][0]['data'][2]['value']);
+        $this->assertSame('123', $result['data'][0]['data'][0]['value']);
+        $this->assertSame('', $result['data'][0]['data'][1]['value']);
+        $this->assertSame('12.5', $result['data'][0]['data'][3]['value']);
     }
 
     public function test_export_user_data_includes_user_agent_when_trace_meta_contains_it(): void
@@ -193,15 +194,16 @@ class PrivacyTest extends TestCase
         $data = $result['data'][0]['data'];
 
         $this->assertSame('trace-' . str_repeat('t', 128), $result['data'][0]['item_id']);
-        $this->assertSame(2048, strlen($data[0]['value']));
-        $this->assertSame(20, strlen($data[1]['value']));
-        $this->assertSame(64, strlen($data[2]['value']));
+        $this->assertSame(2048, strlen($data[1]['value']));
+        $this->assertSame(20, strlen($data[2]['value']));
         $this->assertSame(64, strlen($data[3]['value']));
-        $this->assertSame(45, strlen($data[4]['value']));
-        $this->assertSame(500, strlen($data[5]['value']));
+        $this->assertSame(64, strlen($data[4]['value']));
+        $this->assertSame(45, strlen($data[5]['value']));
+        $this->assertSame(500, strlen($data[8]['value']));
+        $this->assertSame('Complete trace data (JSON)', $data[9]['name']);
     }
 
-    public function test_export_user_data_does_not_load_trace_details_when_user_agent_tracking_is_disabled(): void
+    public function test_export_user_data_includes_complete_trace_even_when_user_agent_is_absent(): void
     {
         $GLOBALS['wp_flame_test_users_by_email'] = [
             'person@example.com' => ['ID' => 123],
@@ -226,7 +228,13 @@ class PrivacyTest extends TestCase
                     'ip_address' => '203.0.113.10',
                 ],
             ]);
-        $storage->expects($this->never())->method('get_trace');
+        $storage->expects($this->once())
+            ->method('get_trace')
+            ->with('trace-1')
+            ->willReturn(new Trace(
+                'trace-1', '/account', 'GET', '2026-06-01T00:00:00Z', 25.0, 1024,
+                PHP_VERSION, '6.7', []
+            ));
 
         $result = (new Privacy($storage))->export_user_data('person@example.com');
 
@@ -234,6 +242,10 @@ class PrivacyTest extends TestCase
             ['name' => 'User Agent', 'value' => 'Mozilla/5.0 Test'],
             $result['data'][0]['data']
         );
+        $exported_data = $result['data'][0]['data'];
+        $last_item = end($exported_data);
+        $this->assertIsArray($last_item);
+        $this->assertSame('Complete trace data (JSON)', $last_item['name']);
     }
 
     public function test_export_user_data_ignores_malformed_user_id_without_querying_storage(): void
@@ -287,6 +299,33 @@ class PrivacyTest extends TestCase
 
         $this->assertSame(4, $result['items_removed']);
         $this->assertTrue($result['done']);
+        $this->assertNotEmpty($result['messages']);
+    }
+
+    public function test_erase_user_data_continues_after_a_full_bounded_batch(): void
+    {
+        $GLOBALS['wp_flame_test_users_by_email'] = [
+            'person@example.com' => ['ID' => 123],
+        ];
+        $storage = $this->getMockBuilder(Storage::class)
+            ->disableOriginalConstructor()
+            ->onlyMethods(['delete_traces_by_user'])
+            ->getMock();
+        $storage->method('delete_traces_by_user')->willReturn(Storage::PRIVACY_DELETE_BATCH_LIMIT);
+
+        $result = (new Privacy($storage))->erase_user_data('person@example.com');
+
+        $this->assertFalse($result['done']);
+        $this->assertSame([], $result['messages']);
+    }
+
+    public function test_suggested_policy_discloses_local_storage_and_anonymous_erasure_limit(): void
+    {
+        $policy = Privacy::suggested_policy_text();
+
+        $this->assertStringContainsString('not sent to WP Flame', $policy);
+        $this->assertStringContainsString('cannot be reliably associated with an email address', $policy);
+        $this->assertStringContainsString('explicit sensitive-data acknowledgement', $policy);
     }
 
     public function test_erase_user_data_ignores_malformed_user_id_and_bounds_delete_count(): void

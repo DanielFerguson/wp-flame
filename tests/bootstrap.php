@@ -23,6 +23,9 @@ if (! $is_integration) {
 if (! defined('ABSPATH')) {
     define('ABSPATH', '/var/www/html/');
 }
+if (! defined('WP_CONTENT_DIR')) {
+    define('WP_CONTENT_DIR', ABSPATH . 'wp-content');
+}
 
 if (! class_exists('wpdb')) {
     class wpdb
@@ -34,6 +37,8 @@ if (! class_exists('wpdb')) {
         public array $last_insert_data = [];
         /** @var mixed */
         public $last_query = '';
+        /** @var int|bool */
+        public $query_result = 0;
         public string $last_error = '';
 
         public function prepare($query, ...$args)
@@ -78,7 +83,7 @@ if (! class_exists('wpdb')) {
         public function query($query)
         {
             $this->last_query = $query;
-            return 0;
+            return $this->query_result;
         }
 
         public function insert($table, $data, $formats)
@@ -119,6 +124,12 @@ if (! function_exists('esc_attr__')) {
 }
 if (! function_exists('esc_attr')) {
     function esc_attr($text): string
+    {
+        return htmlspecialchars((string) $text, ENT_QUOTES, 'UTF-8');
+    }
+}
+if (! function_exists('esc_html')) {
+    function esc_html($text): string
     {
         return htmlspecialchars((string) $text, ENT_QUOTES, 'UTF-8');
     }
@@ -171,6 +182,18 @@ if (! function_exists('sanitize_text_field')) {
     function sanitize_text_field($value): string
     {
         return trim(strip_tags((string) $value));
+    }
+}
+if (! function_exists('get_template_directory')) {
+    function get_template_directory(): string
+    {
+        return $GLOBALS['wp_flame_test_template_directory'] ?? '';
+    }
+}
+if (! function_exists('get_stylesheet_directory')) {
+    function get_stylesheet_directory(): string
+    {
+        return $GLOBALS['wp_flame_test_stylesheet_directory'] ?? '';
     }
 }
 if (! function_exists('esc_url_raw')) {

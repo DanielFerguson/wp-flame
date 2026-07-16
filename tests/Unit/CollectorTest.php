@@ -13,6 +13,7 @@ class CollectorTest extends TestCase
     protected function tearDown(): void
     {
         unset($_SERVER['REQUEST_URI'], $_SERVER['REQUEST_METHOD']);
+        unset($GLOBALS['wp_flame_test_template_directory'], $GLOBALS['wp_flame_test_stylesheet_directory']);
         Collector::reset();
     }
 
@@ -177,6 +178,44 @@ class CollectorTest extends TestCase
         $this->assertSame($parent_id, $spans_by_name['Child2']->parent_id);
     }
 
+    public function test_out_of_order_close_does_not_pop_or_corrupt_another_span(): void
+    {
+        $collector = Collector::instance();
+        $collector->start_request(microtime(true));
+
+        $parent = $collector->start_span('Parent', Span::TYPE_CORE, 'wordpress');
+        $child = $collector->start_span('Child', Span::TYPE_PLUGIN, 'test-plugin');
+
+        $collector->end_span($parent);
+        $this->assertCount(0, $collector->get_trace()->spans);
+
+        $collector->end_span($child);
+        $collector->end_span($parent);
+        $trace = $collector->get_trace();
+
+        $this->assertCount(2, $trace->spans);
+        $this->assertSame('Child', $trace->spans[0]->name);
+        $this->assertSame('Parent', $trace->spans[1]->name);
+        $this->assertSame($parent, $trace->spans[0]->parent_id);
+        $this->assertSame(1, $trace->meta['wp_flame_span_close_mismatches']);
+        $this->assertContains('span_close_mismatch', $trace->capture_report->incomplete_reasons);
+    }
+
+    public function test_unknown_filtered_close_leaves_open_stack_intact(): void
+    {
+        $collector = Collector::instance();
+        $collector->start_request(microtime(true));
+        $open = $collector->start_span('Open', Span::TYPE_CORE, 'wordpress');
+
+        $collector->end_span_filtered('unknown-id', 0.0);
+        $collector->end_span($open);
+        $trace = $collector->get_trace();
+
+        $this->assertCount(1, $trace->spans);
+        $this->assertSame('Open', $trace->spans[0]->name);
+        $this->assertContains('span_close_mismatch', $trace->capture_report->incomplete_reasons);
+    }
+
     public function test_stop_makes_start_span_return_empty_string(): void
     {
         $collector = Collector::instance();
@@ -235,6 +274,8 @@ class CollectorTest extends TestCase
         $this->assertCount(1, $trace->spans);
         $this->assertSame('First', $trace->spans[0]->name);
         $this->assertSame(1, $trace->meta['wp_flame_dropped_spans']);
+        $this->assertSame(1, $trace->capture_report->dropped_span_count);
+        $this->assertContains('dropped_spans', $trace->capture_report->incomplete_reasons);
     }
 
     public function test_close_open_spans_adds_auto_closed_meta(): void
@@ -250,6 +291,8 @@ class CollectorTest extends TestCase
         $trace = $collector->get_trace();
         $this->assertCount(1, $trace->spans);
         $this->assertTrue($trace->spans[0]->meta['auto_closed']);
+        $this->assertSame(1, $trace->capture_report->auto_closed_span_count);
+        $this->assertContains('auto_closed_spans', $trace->capture_report->incomplete_reasons);
     }
 
     public function test_close_open_spans_closes_multiple_in_order(): void
@@ -316,6 +359,26 @@ class CollectorTest extends TestCase
         $result = $collector->get_source_from_file('/var/www/html/wp-content/plugins-extra/foo.php');
 
         $this->assertNotSame('extra', $result['source']);
+    }
+
+    public function test_get_source_distinguishes_mu_plugins_drop_ins_and_child_themes(): void
+    {
+        if (! defined('WPMU_PLUGIN_DIR')) {
+            define('WPMU_PLUGIN_DIR', '/var/www/html/wp-content/mu-plugins');
+        }
+        $GLOBALS['wp_flame_test_template_directory'] = '/var/www/html/wp-content/themes/parent';
+        $GLOBALS['wp_flame_test_stylesheet_directory'] = '/var/www/html/wp-content/themes/child';
+        $collector = Collector::instance();
+
+        $mu = $collector->get_source_from_file('/var/www/html/wp-content/mu-plugins/host-tools/loader.php');
+        $drop_in = $collector->get_source_from_file('/var/www/html/wp-content/object-cache.php');
+        $child = $collector->get_source_from_file('/var/www/html/wp-content/themes/child/functions.php');
+        $parent = $collector->get_source_from_file('/var/www/html/wp-content/themes/parent/functions.php');
+
+        $this->assertSame('mu-plugin:host-tools', $mu['source']);
+        $this->assertSame('drop-in:object-cache', $drop_in['source']);
+        $this->assertSame('child-theme:child', $child['source']);
+        $this->assertSame('parent-theme:parent', $parent['source']);
     }
 
     public function test_directory_constant_helper_returns_empty_string_for_missing_constants(): void
@@ -527,7 +590,7 @@ class CollectorTest extends TestCase
 
         $trace = $collector->get_trace();
 
-        $this->assertSame('/my-account/view-order/123?key=[redacted]&token=[redacted]&page=2', $trace->url);
+        $this->assertSame('/my-account/view-order/[redacted]?key=[redacted]&token=[redacted]&page=2', $trace->url);
     }
 
     public function test_get_trace_tolerates_malformed_server_values(): void
