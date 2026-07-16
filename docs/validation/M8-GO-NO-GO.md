@@ -43,7 +43,7 @@ Allowed states: `pass`, `conditional`, `pending`, `failed`, or `not-applicable` 
 
 | Gate | State | Current evidence / missing proof |
 | --- | --- | --- |
-| Complete CI/compatibility matrix | Pending | Local M6 evidence is green; version-tag CI is configured to run every gate before the release-artifact job, but the reviewed exact tag has not run. |
+| Complete CI/compatibility matrix | Pending | Local M6 evidence is green and the reviewed candidate is committed on `feat/wp-flame-v1-rc`; version-tag CI is configured to run every gate before the release-artifact job, but no remote is configured and the merged exact tag has not run. |
 | No open P0 | Pending | No known field P0, but RC exposure has not started. |
 | Deferred P1s are visibly safe | Pending | Populate blocker register during RC. |
 | Public benchmark/compatibility/privacy/limitations/support/refund pages | Pending | Repository content/drafts exist; public URLs, seller details, and legal review are absent. |

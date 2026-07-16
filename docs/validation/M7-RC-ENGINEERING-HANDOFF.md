@@ -30,10 +30,10 @@ Engineering state: locally releaseable; official publication remains NO-GO pendi
 | Performance | CI-sized 31-row budget passes at 10 runs; dated 100-run publication remains the public benchmark evidence |
 | Plugin Check 2.0.0 | zero errors using CI's non-PHPCS package checks; documented warnings remain |
 | Package contents | self-contained operator docs, GPL license, disclosure route, optimized runtime autoloader; dev/internal material excluded |
-| Reproducibility | two current dirty-worktree test builds are byte-identical |
+| Reproducibility | two builds from reviewed committed candidate `3b82fa3` are byte-identical |
 | Package lifecycle | clean install, deactivate/reactivate, uninstall, authentic `1.2.0` upgrade, loader migration, schema migration, rollback, data retention, and return to candidate pass |
 
-The current local dirty-worktree artifact is approximately 224 KB with SHA-256 `50eab5c12434967174e860b6025257eae04a458789ba1287557862dc9fc9d988`. It is diagnostic evidence only. Its checksum must not be published because the official artifact must derive from the reviewed exact tag and its commit timestamp.
+The local untagged artifact built from reviewed candidate commit `3b82fa3` is approximately 224 KB with SHA-256 `77375591fe41311153b402c34a241f9db9f98d029d5be82105fdac25c485f829`. A second build was byte-identical. This is diagnostic evidence only: the official checksum must derive from the merged exact tag and its commit timestamp.
 
 ## Corrected lifecycle evidence
 
@@ -61,10 +61,11 @@ The gate now reconstructs the predecessor from commit `e58bef570e8e6b53925796de6
 
 ## Owner-controlled gates still open
 
-1. **Repository authorization:** identify pre-existing paths/hunks to exclude, or authorize the complete current candidate for reviewed logical commits while excluding generated caches/artifacts.
-2. **Review and exact tag:** review/merge the intended candidate, create `v1.3.0-rc.1`, and require the tag workflow to pass.
-3. **Seller and policy inputs:** complete `docs/commercial/PUBLICATION-INPUTS.md`, qualified terms/refund/privacy review, public support contact/capacity, checkout/tax/renewal configuration, and final URLs.
-4. **Paid-RC entry:** confirm capacity, accept payment only for qualified participants, obtain separate per-site authorization and separate optional research/publication permissions.
-5. **M8 evidence:** run 10–20 paid partners, at least 14 qualifying field days, three permissioned compatible before/after cases, and blocker closure.
+Repository authorization and logical candidate commits are complete. Generated caches and artifacts were excluded, and the tracked worktree was clean after commit formation.
+
+1. **Review-branch publication and exact tag:** no Git remote is configured in this workspace. Publish/review/merge `feat/wp-flame-v1-rc`, create `v1.3.0-rc.1`, and require the tag workflow to pass once the intended repository is available.
+2. **Seller and policy inputs:** complete `docs/commercial/PUBLICATION-INPUTS.md`, qualified terms/refund/privacy review, public support contact/capacity, checkout/tax/renewal configuration, and final URLs.
+3. **Paid-RC entry:** confirm capacity, accept payment only for qualified participants, obtain separate per-site authorization and separate optional research/publication permissions.
+4. **M8 evidence:** run 10–20 paid partners, at least 14 qualifying field days, three permissioned compatible before/after cases, and blocker closure.
 
 No local test can convert any of those external records into a pass. The release decision remains `NO-GO` until their evidence is linked from `M8-GO-NO-GO.md`.

@@ -70,12 +70,15 @@ Measure actual onboarding minutes, support minutes, response time, refunds, and 
 
 ## Repository release authorization
 
-The current working tree contains both roadmap implementation and changes that pre-dated autonomous execution. Before forming the official tag, the repository owner must provide one of these explicit instructions:
+Repository authorization was granted on 2026-07-16 for the complete reviewed candidate, excluding generated caches and artifacts. The candidate was organized on `feat/wp-flame-v1-rc` as:
 
-- Approve the complete current candidate scope for reviewed commits, while excluding generated `.phpunit.result.cache`, ZIPs, build output, test results, environment homes, and distribution output; or
-- Identify the pre-existing paths/hunks that must remain outside the RC commits.
+- `136f273` — product, commercial, support, and release documentation.
+- `4014bcb` — runtime performance diagnosis and focused behavior tests.
+- `3b82fa3` — CI, deterministic packaging, browser QA, and quality gates.
 
-After authorization, review the staged diff, create logical commits, push the review branch, obtain the intended review, merge, create exact tag `v1.3.0-rc.1`, and require the tag workflow's immutable release job to pass. A local dirty-worktree ZIP or synthetic test tag is never the official artifact.
+The tracked worktree was clean after the commits. Generated `.phpunit.result.cache`, ZIPs, build output, test results, environment homes, dependency directories, and distribution output were not committed.
+
+No Git remote is configured in this workspace as of 2026-07-16. The remaining repository sequence is therefore external: configure or identify the intended remote, publish the review branch, obtain the intended review, merge, create exact tag `v1.3.0-rc.1`, and require the tag workflow's immutable release job to pass. A local untagged ZIP or synthetic test tag is never the official artifact.
 
 ## Publication authorization
 
